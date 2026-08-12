@@ -1,0 +1,48 @@
+{
+  "pages": [
+    {
+      "path": "pages/reading/reading",
+      "style": { "navigationBarTitleText": "阅读" }
+    },
+    {
+      "path": "pages/article/article",
+      "style": { "navigationBarTitleText": "文章" }
+    },
+    {
+      "path": "pages/plan/plan",
+      "style": { "navigationBarTitleText": "计划" }
+    },
+    {
+      "path": "pages/words/words",
+      "style": { "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/mine/mine",
+      "style": { "navigationBarTitleText": "我的" }
+    },
+    {
+      "path": "pages/quiz/quiz",
+      "style": { "navigationBarTitleText": "答题" }
+    },
+    {
+      "path": "pages/wrong/wrong",
+      "style": { "navigationBarTitleText": "错题本" }
+    },
+    {
+      "path": "pages/export/export",
+      "style": { "navigationBarTitleText": "导出 PDF" }
+    },
+    {
+      "path": "pages/model-form/model-form",
+      "style": { "navigationBarTitleText": "模型配置" }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "GlobalOverview",
+    "navigationBarBackgroundColor": "#F3EBDE",
+    "backgroundColor": "#F3EBDE",
+    "animationType": "pop-in",
+    "animationDuration": 280
+  }
+}

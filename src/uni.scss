@@ -1,0 +1,85 @@
+/* =============================================================
+ * GlobalOverview · 设计令牌 (Design Tokens) - SCSS 别名层
+ *
+ * 注意：所有 --go-* CSS 变量定义已经移到 src/App.vue 的 <style> 中，
+ *       因为 uni-app 会自动把 uni.scss 注入到每个 <style scoped>，
+ *       导致 :root 选择器被加 page scope，变量失效。
+ *       App.vue 是非 scoped，变量定义在那里只出现一次，全局生效。
+ *
+ * 这里仅保留 SCSS 别名（$primary / $surface 等），它们在编译期
+ * 展开为 var(--go-*) 字符串，运行时到 <html> 上查找变量。
+ * ============================================================= */
+
+/* ---------- SCSS 别名（兼容历史 $ 引用） ---------- */
+$primary: var(--go-primary);
+$primary-95: var(--go-primary-95);
+$primary-90: var(--go-primary-90);
+$primary-80: var(--go-primary-80);
+$primary-60: var(--go-primary-60);
+$primary-20: var(--go-primary-20);
+$on-primary: var(--go-on-primary);
+
+$secondary: var(--go-secondary);
+$on-secondary: var(--go-on-secondary);
+$secondary-container: var(--go-secondary-container);
+$on-secondary-container: var(--go-on-secondary-container);
+
+$tertiary: var(--go-tertiary);
+$on-tertiary: var(--go-on-tertiary);
+$tertiary-container: var(--go-tertiary-container);
+$on-tertiary-container: var(--go-on-tertiary-container);
+
+$bg: var(--go-bg);
+$surface: var(--go-surface);
+$surface-1: var(--go-surface-1);
+$surface-2: var(--go-surface-2);
+$surface-variant: var(--go-surface-variant);
+$surface-raised: var(--go-surface-raised);
+$on-surface: var(--go-on-surface);
+$on-surface-2: var(--go-on-surface-2);
+$on-surface-3: var(--go-on-surface-3);
+$on-surface-disabled: var(--go-on-surface-disabled);
+$outline: var(--go-outline);
+$outline-strong: var(--go-outline-strong);
+
+$success: var(--go-success);
+$on-success: var(--go-on-success);
+$warning: var(--go-warning);
+$on-warning: var(--go-on-warning);
+$danger: var(--go-danger);
+$on-danger: var(--go-on-danger);
+
+$sel-bg: var(--go-sel);
+$sel-bg-strong: var(--go-sel-strong);
+
+$font-sans: var(--go-font-sans);
+$font-read: var(--go-font-read);
+$font-mono: var(--go-font-mono);
+
+$fs-display: var(--go-fs-display);
+$fs-h1: var(--go-fs-h1);
+$fs-h2: var(--go-fs-h2);
+$fs-title: var(--go-fs-title);
+$fs-body: var(--go-fs-body);
+$fs-body-sm: var(--go-fs-body-sm);
+$fs-label: var(--go-fs-label);
+$fs-meta: var(--go-fs-meta);
+$fs-cap: var(--go-fs-cap);
+
+$r-xs: var(--go-r-xs);
+$r-sm: var(--go-r-sm);
+$r-md: var(--go-r-md);
+$r-lg: var(--go-r-lg);
+$r-xl: var(--go-r-xl);
+$r-full: var(--go-r-full);
+
+$sp-1: var(--go-sp-1);
+$sp-2: var(--go-sp-2);
+$sp-3: var(--go-sp-3);
+$sp-4: var(--go-sp-4);
+$sp-5: var(--go-sp-5);
+$sp-6: var(--go-sp-6);
+$sp-8: var(--go-sp-8);
+$sp-10: var(--go-sp-10);
+$sp-12: var(--go-sp-12);
+$sp-16: var(--go-sp-16);
