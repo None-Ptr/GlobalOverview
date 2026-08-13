@@ -12,6 +12,7 @@ node_modules
 dist
 *.local
 
+
 # Editor directories and files
 .idea
 *.suo
@@ -28,4 +29,4 @@ scratch_aar*.zip
 verify_final/
 build_apk.bat
 *.apk
-.codebuddy/
+init.md
