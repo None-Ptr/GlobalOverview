@@ -167,7 +167,7 @@ async function clearCache() {
     success: async (res) => {
       if (res.confirm) {
         await db.execute('DELETE FROM feed_items')
-        await db.execute('DELETE FROM dict_cache')
+        await db.execute('DELETE FROM word_cache')
         uni.showToast({ title: '已清除', icon: 'success' })
       }
     }
@@ -181,7 +181,7 @@ async function clearAll() {
     success: async (res) => {
       if (res.confirm) {
         // 仅清除真实存在的业务表（schema 无 wrong_items/quiz_sets/plans 等表）
-        for (const t of ['articles', 'feed_items', 'question_sets', 'questions', 'plan_items', 'word_cache']) {
+        for (const t of ['articles', 'feed_items', 'question_sets', 'questions', 'answers', 'plan_items', 'word_cache']) {
           try { await db.execute(`DELETE FROM ${t}`) } catch (e) { /* 表不存在则跳过 */ }
         }
         uni.showToast({ title: '已清空', icon: 'success' })

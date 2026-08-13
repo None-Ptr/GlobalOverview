@@ -380,7 +380,7 @@ async function persistItems(feed, list, replaceCache) {
   }
   // 一次性取出本批已存在的 guid，避免逐条 SELECT
   const placeholders = guids.map(() => '?').join(',')
-  const existed = await db.select(`SELECT guid FROM feed_items WHERE guid IN (${placeholders})`, guids)
+  const existed = await db.select(`SELECT guid FROM feed_items WHERE feedId = ? AND guid IN (${placeholders})`, [feed.id, ...guids])
   const existedSet = new Set(existed.map((r) => r.guid))
   // 组装批量 INSERT（只插不存在的）
   const rows = [], params = []

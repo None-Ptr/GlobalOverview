@@ -8,9 +8,9 @@ function normalize(res) {
   if (Array.isArray(res)) {
     const err = res[0], real = res[1]
     if (err) return { __error: new Error(err && err.errMsg ? err.errMsg : '网络请求失败') }
-    return { data: real }
+    return real || {}
   }
-  return res
+  return res || {}
 }
 
 // 统一请求：始终 resolve 成 { statusCode, data, header }

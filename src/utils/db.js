@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS feeds (
 CREATE TABLE IF NOT EXISTS feed_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   feedId INTEGER, guid TEXT, title TEXT, link TEXT,
-  preview TEXT, pubDate INTEGER, fetchedAt INTEGER
+  preview TEXT, pubDate INTEGER, fetchedAt INTEGER,
+  UNIQUE(feedId, guid)
 );
 CREATE TABLE IF NOT EXISTS articles (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -68,6 +69,8 @@ const MIGRATIONS = [
   'ALTER TABLE answers ADD COLUMN draft TEXT',
   "ALTER TABLE answers ADD COLUMN status TEXT DEFAULT 'graded'",
   'ALTER TABLE answers ADD COLUMN comment TEXT',
+  'ALTER TABLE answers ADD COLUMN correct INTEGER',
+  'ALTER TABLE answers ADD COLUMN wrong INTEGER DEFAULT 0',
   'ALTER TABLE articles ADD COLUMN blocks TEXT',
 ]
 
@@ -220,7 +223,7 @@ function parseValues(str) {
     else {
       const t = bareBuf.trim()
       if (/^null$/i.test(t)) out.push(null)
-      else if (/^-?\d+(\.\d+)?$/.test(t)) out.push(Number(t))
+      else if (/^[+-]?(\d+(\.\d+)?|\.\d+)([eE][+-]?\d+)?$/.test(t)) out.push(Number(t))
       else out.push(t)
     }
     quotedBuf = ''
@@ -257,10 +260,26 @@ function buildWhere(whereStr) {
     if (m) { const c = col(m[1]); return (r) => r[c] !== null && r[c] !== undefined }
     m = p.match(/^([\w.]+)\s+IS\s+NULL$/i)
     if (m) { const c = col(m[1]); return (r) => r[c] === null || r[c] === undefined }
-    m = p.match(/^([\w.]+)\s+IN\s*\(([^)]*)\)$/i)
-    if (m) { const c = col(m[1]); const set = parseValues(m[2]); return (r) => set.some((v) => looseEq(r[c], v)) }
+    m = p.match(/^([\w.]+)\s+IN\s*\(([\s\S]*)\)$/i)
+    if (m) {
+      const c = col(m[1])
+      const inner = m[2].trim()
+      if (/^SELECT\s/i.test(inner)) {
+        const sub = memSelect(inner).map((row) => Object.values(row)[0])
+        return (r) => sub.some((v) => looseEq(r[c], v))
+      }
+      const set = parseValues(m[2])
+      return (r) => set.some((v) => looseEq(r[c], v))
+    }
     m = p.match(/^([\w.]+)\s*(!=|<>|>=|<=|=|>|<)\s*([\s\S]+)$/)
     if (m) { const c = col(m[1]); const op = m[2]; const v = parseValues(m[3])[0]; return (r) => cmp(r[c], op, v) }
+    m = p.match(/^([\w.]+)\s+LIKE\s+'([\s\S]*)'$/i)
+    if (m) {
+      const c = col(m[1])
+      const pat = m[2].replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/%/g, '.*').replace(/_/g, '.')
+      const re = new RegExp('^' + pat + '$')
+      return (r) => r[c] != null && re.test(String(r[c]))
+    }
     return () => true
   })
   return (r) => preds.every((f) => f(r))
@@ -283,6 +302,29 @@ function cmp(a, op, b) {
   }
 }
 
+function splitParenGroups(s) {
+  const out = []
+  let depth = 0, buf = '', inStr = false
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i]
+    if (inStr) {
+      buf += c
+      if (c === "'") { if (s[i + 1] === "'") { buf += "'"; i++ } else inStr = false }
+      continue
+    }
+    if (c === "'") { inStr = true; buf += c; continue }
+    if (c === '(' && depth === 0) { depth = 1; buf = ''; continue }
+    if (c === '(') { depth++; buf += c; continue }
+    if (c === ')') {
+      depth--
+      if (depth === 0) { out.push(buf); continue }
+      buf += c; continue
+    }
+    if (depth > 0) buf += c
+  }
+  return out
+}
+
 function memExec(sqlRaw) {
   const sql = stripSql(sqlRaw)
   if (!sql) return { rowsAffected: 0 }
@@ -290,34 +332,42 @@ function memExec(sqlRaw) {
   if (/^CREATE\s+TABLE/i.test(sql)) return { rowsAffected: 0 }
   if (/^ALTER\s+TABLE/i.test(sql)) return { rowsAffected: 0 }
 
-  let m = sql.match(/^INSERT\s+(OR\s+(IGNORE|REPLACE)\s+)?INTO\s+(\w+)\s*\(([^)]*)\)\s*VALUES\s*\(([\s\S]*)\)$/i)
+  let m = sql.match(/^INSERT\s+(OR\s+(IGNORE|REPLACE)\s+)?INTO\s+(\w+)\s*\(([^)]*)\)\s*VALUES\s+([\s\S]+)$/i)
   if (m) {
     const conflict = (m[2] || '').toUpperCase()
     const table = memEnsure(m[3])
     const cols = m[4].split(',').map((s) => s.trim())
-    const vals = parseValues(m[5])
-    const row = {}
-    cols.forEach((c, i) => { row[c] = vals[i] === undefined ? null : vals[i] })
-    const uniq = MEM_UNIQUE[m[3]]
-    if (uniq) {
-      const hit = table.rows.find((r) => uniq.every((c) => looseEq(r[c], row[c])))
-      if (hit) {
-        if (conflict === 'IGNORE') return { rowsAffected: 0, insertId: hit.id }
-        if (conflict === 'REPLACE') {
-          const old = { ...hit }
-          Object.assign(hit, row)
-          memIndexDelete(m[3], old)
-          memIndexPut(m[3], hit)
-          memFlush()
-          return { rowsAffected: 1, insertId: hit.id }
+    const groups = splitParenGroups(m[5])
+    let insertId = null
+    let affected = 0
+    for (const g of groups) {
+      const vals = parseValues(g)
+      const row = {}
+      cols.forEach((c, i) => { row[c] = vals[i] === undefined ? null : vals[i] })
+      const uniq = MEM_UNIQUE[m[3]]
+      if (uniq) {
+        const hit = table.rows.find((r) => uniq.every((c) => looseEq(r[c], row[c])))
+        if (hit) {
+          if (conflict === 'IGNORE') { insertId = hit.id; continue }
+          if (conflict === 'REPLACE') {
+            const old = { ...hit }
+            Object.assign(hit, row)
+            memIndexDelete(m[3], old)
+            memIndexPut(m[3], hit)
+            insertId = hit.id
+            affected++
+            continue
+          }
         }
       }
+      row.id = ++table.seq
+      table.rows.push(row)
+      memIndexPut(m[3], row)
+      insertId = row.id
+      affected++
     }
-    row.id = ++table.seq
-    table.rows.push(row)
-    memIndexPut(m[3], row)
     memFlush()
-    return { rowsAffected: 1, insertId: row.id }
+    return { rowsAffected: affected, insertId }
   }
 
   m = sql.match(/^UPDATE\s+(\w+)\s+SET\s+([\s\S]+)$/i)
@@ -482,6 +532,16 @@ function memSelect(sqlRaw) {
       }
       return base
     })
+  } else if (countM) {
+    // 无 GROUP BY 的 COUNT(*)/COUNT(col)：折叠为单行聚合结果
+    const raw = countM[1]
+    const val = raw === '*'
+      ? rows.length
+      : rows.filter((r) => {
+        const v = r[raw] !== undefined ? r[raw] : r[col(raw)]
+        return v !== null && v !== undefined
+      }).length
+    rows = [{ [countM[2]]: val }]
   }
 
   const om = rest.match(/ORDER\s+BY\s+([\w.]+)(\s+DESC|\s+ASC)?/i)
@@ -491,8 +551,11 @@ function memSelect(sqlRaw) {
     rows.sort((a, b) => {
       const x = a[key], y = b[key]
       if (x === y) return 0
-      const r = (Number(x) || 0) === Number(x) && (Number(y) || 0) === Number(y)
-        ? Number(x) - Number(y)
+      const nx = Number(x), ny = Number(y)
+      const rx = x !== '' && x != null && Number.isFinite(nx)
+      const ry = y !== '' && y != null && Number.isFinite(ny)
+      const r = rx && ry
+        ? nx - ny
         : String(x).localeCompare(String(y))
       return desc ? -r : r
     })
@@ -502,8 +565,10 @@ function memSelect(sqlRaw) {
   if (lm) rows = rows.slice(0, Number(lm[1]))
 
   // 字段投影：处理 `a.id AS aid` 之类别名；`*` / `t.*` 直接透传
-  if (!/^\s*\*\s*$/.test(fieldStr) && !/^\s*\w+\.\*\s*$/.test(fieldStr) && !countM) {
-    const specs = fieldStr.split(',').map((s) => s.trim())
+  const distinctM = fieldStr.match(/^\s*DISTINCT\s+/i)
+  const projStr = distinctM ? fieldStr.slice(distinctM[0].length) : fieldStr
+  if (!/^\s*\*\s*$/.test(projStr) && !/^\s*\w+\.\*\s*$/.test(projStr) && !countM) {
+    const specs = projStr.split(',').map((s) => s.trim())
     const hasStar = specs.some((s) => s === '*' || /^\w+\.\*$/.test(s))
     rows = rows.map((r) => {
       const o = hasStar ? { ...r } : {}
@@ -519,6 +584,15 @@ function memSelect(sqlRaw) {
     })
   } else {
     rows = rows.map((r) => cleanRow({ ...r }))
+  }
+  if (distinctM) {
+    const seen = new Set()
+    rows = rows.filter((r) => {
+      const k = JSON.stringify(r)
+      if (seen.has(k)) return false
+      seen.add(k)
+      return true
+    })
   }
   return rows
 }
@@ -557,11 +631,10 @@ function splitStatements(sql) {
   for (let i = 0; i < sql.length; i++) {
     const c = sql[i]
     if (inStr) {
-      cur += c
       if (c === "'") {
-        if (sql[i + 1] === "'") { cur += "'"; i++ }
-        else inStr = false
-      }
+        if (sql[i + 1] === "'") { cur += "''"; i++ }
+        else { cur += c; inStr = false }
+      } else cur += c
       continue
     }
     if (c === "'") { inStr = true; cur += c; continue }
@@ -583,16 +656,21 @@ async function init() {
   if (inited) return initPromise || Promise.resolve()
   if (initPromise) return initPromise
   initPromise = (async () => {
-    if (!IS_APP) { memLoad(); inited = true; return }
-    await openDb()
-    // plus.sqlite 单条 executeSql 不接受多语句，逐条建表
-    for (const stmt of splitStatements(SCHEMA)) {
-      await execute(stmt)
+    try {
+      if (!IS_APP) { memLoad(); inited = true; return }
+      await openDb()
+      // plus.sqlite 单条 executeSql 不接受多语句，逐条建表
+      for (const stmt of splitStatements(SCHEMA)) {
+        await execute(stmt)
+      }
+      for (const mg of MIGRATIONS) {
+        try { await execute(mg) } catch (e) { /* 列已存在 */ }
+      }
+      inited = true
+    } catch (e) {
+      initPromise = null
+      throw e
     }
-    for (const mg of MIGRATIONS) {
-      try { await execute(mg) } catch (e) { /* 列已存在 */ }
-    }
-    inited = true
   })()
   return initPromise
 }
@@ -602,14 +680,15 @@ async function init() {
 function bindParams(sql, params) {
   if (!params || !params.length) return sql
   let i = 0
-  return sql.replace(/('(?:''|[^'])*')|("(?:\"|[^"])*")|(`(?:``|[^`])*`)|\?/g, (m, s, d, b) => {
+  return sql.replace(/('(?:''|[^'])*')|("(?:""|[^"])*")|(`(?:``|[^`])*`)|\?/g, (m, s, d, b) => {
     if (s || d || b) return m
-    if (i >= params.length) return m
+    if (i >= params.length) return 'NULL'
     return sqlVal(params[i++])
   })
 }
 
-function execute(sql, params) {
+async function execute(sql, params) {
+  await init()
   const bound = bindParams(sql, params)
   return new Promise((resolve, reject) => {
     if (!IS_APP) {
@@ -630,7 +709,8 @@ function execute(sql, params) {
   })
 }
 
-function select(sql, params) {
+async function select(sql, params) {
+  await init()
   const bound = bindParams(sql, params)
   return new Promise((resolve, reject) => {
     if (!IS_APP) { memLoad(); return resolve(memSelect(bound)) }
@@ -643,12 +723,21 @@ function select(sql, params) {
   })
 }
 
-// 插入并返回自增 id
+let writeLock = Promise.resolve()
+function withWriteLock(fn) {
+  const next = writeLock.then(fn, fn)
+  writeLock = next.catch(() => {})
+  return next
+}
+
 async function insertReturnId(sql) {
-  const res = await execute(sql)
-  if (!IS_APP) return res.insertId || mem.lastInsertId || null
-  const rows = await select('SELECT last_insert_rowid() AS id')
-  return rows[0] ? rows[0].id : null
+  await init()
+  return withWriteLock(async () => {
+    await execute(sql)
+    if (!IS_APP) return mem.lastInsertId || null
+    const rows = await select('SELECT last_insert_rowid() AS id')
+    return rows[0] ? rows[0].id : null
+  })
 }
 
 // 清空全部业务数据（保留 LLM 配置与阅读偏好）
@@ -681,42 +770,55 @@ async function loadDraft(questionId) {
 // 批量取草稿：返回 { questionId: draft }
 async function loadDrafts(ids) {
   await init()
+  const list = Array.isArray(ids) ? ids : [ids]
   const out = {}
-  for (const id of ids) out[id] = await loadDraft(id)
+  if (!list.length) return out
+  const rows = await select(
+    `SELECT id, questionId, draft FROM answers WHERE questionId IN (${list.map(sqlVal).join(',')}) AND gradedAt = 0 AND draft IS NOT NULL`
+  )
+  const best = {}
+  for (const r of (rows || [])) {
+    if (!best[r.questionId] || r.id > best[r.questionId].id) best[r.questionId] = r
+  }
+  for (const qid of list) out[qid] = best[qid] ? best[qid].draft : ''
   return out
 }
 
 // 自动保存草稿：复用该题"未判分占位行"（gradedAt=0 且无 final），否则插入新占位行
 async function saveDraft(questionId, content) {
   await init()
-  const rows = await select(
-    `SELECT id FROM answers WHERE questionId = ${sqlVal(questionId)} AND gradedAt = 0 AND (final IS NULL OR final = '') ORDER BY id DESC LIMIT 1`
-  )
-  if (rows && rows.length) {
-    await execute(
-      `UPDATE answers SET draft = ${sqlVal(content)} WHERE id = ${sqlVal(rows[0].id)}`
+  return withWriteLock(async () => {
+    const rows = await select(
+      `SELECT id FROM answers WHERE questionId = ${sqlVal(questionId)} AND gradedAt = 0 AND (final IS NULL OR final = '') ORDER BY id DESC LIMIT 1`
     )
-  } else {
-    await execute(
-      `INSERT INTO answers (questionId, draft, gradedAt) VALUES (${sqlVal(questionId)}, ${sqlVal(content)}, 0)`
-    )
-  }
+    if (rows && rows.length) {
+      await execute(
+        `UPDATE answers SET draft = ${sqlVal(content)} WHERE id = ${sqlVal(rows[0].id)}`
+      )
+    } else {
+      await execute(
+        `INSERT INTO answers (questionId, draft, gradedAt) VALUES (${sqlVal(questionId)}, ${sqlVal(content)}, 0)`
+      )
+    }
+  })
 }
 
 // 交卷后清空草稿（保留 final / 判分结果）：清除未判分草稿占位行的 draft
 async function clearDrafts(questionIds) {
   await init()
   const ids = Array.isArray(questionIds) ? questionIds : [questionIds]
-  for (const qid of ids) {
-    const rows = await select(
-      `SELECT id FROM answers WHERE questionId = ${sqlVal(qid)} AND gradedAt = 0 AND draft IS NOT NULL ORDER BY id DESC LIMIT 1`
-    )
-    if (rows && rows.length) {
-      await execute(
-        `UPDATE answers SET draft = NULL WHERE id = ${sqlVal(rows[0].id)}`
+  return withWriteLock(async () => {
+    for (const qid of ids) {
+      const rows = await select(
+        `SELECT id FROM answers WHERE questionId = ${sqlVal(qid)} AND gradedAt = 0 AND draft IS NOT NULL ORDER BY id DESC LIMIT 1`
       )
+      if (rows && rows.length) {
+        await execute(
+          `UPDATE answers SET draft = NULL WHERE id = ${sqlVal(rows[0].id)}`
+        )
+      }
     }
-  }
+  })
 }
 
 // 取某题作答历史（已判分行，按时间升序），供错题/历史展示
@@ -724,8 +826,15 @@ async function clearDrafts(questionIds) {
 async function loadHistory(questionId) {
   await init()
   if (Array.isArray(questionId)) {
+    const list = questionId
     const out = {}
-    for (const id of questionId) out[id] = await loadHistory(id)
+    if (!list.length) return out
+    const rows = await select(
+      `SELECT questionId, final, correct, wrong, comment, status, gradedAt
+       FROM answers WHERE questionId IN (${list.map(sqlVal).join(',')}) AND gradedAt > 0 ORDER BY gradedAt ASC`
+    )
+    for (const qid of list) out[qid] = []
+    for (const r of (rows || [])) (out[r.questionId] = out[r.questionId] || []).push(r)
     return out
   }
   return select(
