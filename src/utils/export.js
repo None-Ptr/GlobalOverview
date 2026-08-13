@@ -415,7 +415,7 @@ function exportPdfAndroid(html, filename) {
         entry.getFile(path.replace('_doc/', ''), { create: true }, (fileEntry) => {
           fileEntry.createWriter((writer) => {
             writer.onwrite = () => {
-              const fileUrl = fileEntry.toLocalURL()
+              const fileUrl = localUrl(fileEntry)
               // 默认 resolve：预览已打开，同时告诉调用方 url 让 export.vue 给 toast 提示
               resolve({
                 mode: 'preview-and-share',
@@ -431,7 +431,7 @@ function exportPdfAndroid(html, filename) {
                   const msg = '已生成练习卷 HTML（' + (filename || 'export') + '）'
                   plus.share.sendWithSystem({
                     type: 'file',
-                    files: [fileUrl],
+                    files: [shareFileUrl(fileEntry)],
                     title: msg,
                   }, () => {}, () => {})
                 } catch (_) {}
@@ -483,7 +483,7 @@ function exportPdfIos(html, filename) {
           fileEntry.createWriter((writer) => {
             writer.onwrite = () => {
               try {
-                const url = fileEntry.toLocalURL()
+                const url = localUrl(fileEntry)
                 wv = plus.webview.create(url, `print_${Date.now()}`, {
                   top: '0px', bottom: '0px', scrollIndicator: 'none',
                 })
@@ -519,6 +519,31 @@ function exportPdfIos(html, filename) {
   })
 }
 
+// 把 FileEntry.toLocalURL() 规整为 plus.webview 需要的绝对路径。
+// 5+Runtime 部分版本 toLocalURL() 返回 "_doc/xxx.html"（无前导 /）或 "file:///..."，
+// 不带 / 的相对路径传给 plus.webview.create 会报「资源不存在」，统一补成 "/_doc/..." 形式。
+function localUrl(fileEntry) {
+  let u = fileEntry.toLocalURL()
+  if (!u) return u
+  if (u.startsWith('file://')) return u
+  if (!u.startsWith('/')) u = '/' + u
+  return u
+}
+
+// 给 plus.share.sendWithSystem({ type:'file', files:[...] }) 用的文件 URI。
+// 系统分享面板只认标准 file:// scheme，不认 5+ 内部的 "/_doc/..." 抽象路径，
+// 否则会弹「资源不存在」。toURL() 在 5+ 上返回标准 file:// URI，最稳。
+function shareFileUrl(fileEntry) {
+  try {
+    const u = fileEntry.toURL()
+    if (u && u.indexOf('file://') === 0) return u
+  } catch (e) {}
+  // 回退：把 /_doc/xxx 转成 file:///_doc/xxx
+  const u = localUrl(fileEntry)
+  if (u.startsWith('/')) return 'file://' + u
+  return u
+}
+
 // APP 端预览：将 HTML 写入临时文件后用 plus.webview 打开
 // 注意：plus.webview 打开的是独立全屏窗口，默认无任何导航栏/返回按钮，
 // 必须在 HTML 内注入一个返回浮层，否则用户无法退出预览（只能杀进程）。
@@ -532,7 +557,7 @@ export function previewHtmlApp(html, filename = 'preview') {
       entry.getFile(path.replace('_doc/', ''), { create: true }, (fileEntry) => {
         fileEntry.createWriter((writer) => {
           writer.onwrite = () => {
-            const url = fileEntry.toLocalURL()
+            const url = localUrl(fileEntry)
             const wv = plus.webview.create(url, `prev_${Date.now()}`, {
               top: '0px', bottom: '0px', scrollIndicator: 'none',
             })
@@ -547,11 +572,20 @@ export function previewHtmlApp(html, filename = 'preview') {
             }, false)
             wv.show('slide-in-right')
           }
-          writer.onerror = () => {}
+          writer.onerror = () => {
+            // 写入失败必须显式提示，不能静默吞掉（否则用户看到白屏/资源不存在却无任何反馈）
+            uni && uni.showToast && uni.showToast({ title: '预览生成失败，请重试', icon: 'none' })
+          }
           writer.write(wrapped)
-        }, () => {})
-      }, () => {})
-    }, () => {})
+        }, () => {
+          uni && uni.showToast && uni.showToast({ title: '无法创建预览文件', icon: 'none' })
+        })
+      }, () => {
+        uni && uni.showToast && uni.showToast({ title: '无法创建预览文件', icon: 'none' })
+      })
+    }, () => {
+      uni && uni.showToast && uni.showToast({ title: '无法访问本地目录', icon: 'none' })
+    })
     return true
   } catch (e) {
     return false
