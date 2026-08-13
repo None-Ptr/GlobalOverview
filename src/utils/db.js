@@ -74,6 +74,17 @@ const MIGRATIONS = [
   'ALTER TABLE articles ADD COLUMN blocks TEXT',
 ]
 
+// 显式检测列是否存在，不存在才 ALTER（避免靠 ALTER 抛错被吞的隐式逻辑）。
+// 真机 plus.sqlite 不可用时（非 App 环境）直接跳过，兼容内存引擎。
+async function ensureColumn(table, column, def) {
+  if (!IS_APP) return
+  // 这里必须用 raw 查询/执行，因为 ensureColumn 在 init() 内部被调用，
+  // 使用 select()/execute() 会再次 await init() 导致死锁。
+  const info = await rawSelectOne(`PRAGMA table_info(${table})`)
+  const has = (info || []).some((r) => String(r.name).toLowerCase() === String(column).toLowerCase())
+  if (!has) await rawExecuteOne(`ALTER TABLE ${table} ADD COLUMN ${column} ${def}`)
+}
+
 /* ------------------------------------------------------------------ */
 /* SQL 值转义：所有写入统一走 sqlVal / sqlLike，杜绝手工拼引号漏转义      */
 /* ------------------------------------------------------------------ */
@@ -614,11 +625,13 @@ function openDb() {
   return new Promise((resolve, reject) => {
     if (!IS_APP) return resolve(false)
     if (plus.sqlite.isOpenDatabase({ name: DB_NAME, path: `_doc/${DB_NAME}` })) return resolve(true)
+    // 真机 plus.sqlite 偶发回调不触发（数据库锁/引擎 bug），加超时避免永久卡死
+    const timer = setTimeout(() => reject(new Error('数据库打开超时')), 8000)
     plus.sqlite.openDatabase({
       name: DB_NAME,
       path: `_doc/${DB_NAME}`,
-      success: () => resolve(true),
-      fail: (e) => reject(e),
+      success: () => { clearTimeout(timer); resolve(true) },
+      fail: (e) => { clearTimeout(timer); reject(e) },
     })
   })
 }
@@ -659,13 +672,21 @@ async function init() {
     try {
       if (!IS_APP) { memLoad(); inited = true; return }
       await openDb()
-      // plus.sqlite 单条 executeSql 不接受多语句，逐条建表
+      // plus.sqlite 单条 executeSql 不接受多语句，逐条建表。
+      // 注意：这里必须用 rawExecuteOne，不能用 execute()，因为 execute() 会 await init()，
+      // 而 init() 此时正在执行中，会导致递归死锁（页面永久 loading）。
       for (const stmt of splitStatements(SCHEMA)) {
-        await execute(stmt)
+        await rawExecuteOne(stmt)
       }
-      for (const mg of MIGRATIONS) {
-        try { await execute(mg) } catch (e) { /* 列已存在 */ }
-      }
+      // 迁移改为「显式检测列是否存在再 ALTER」，不再依赖 ALTER 抛错被静默吞掉。
+      // 真机 plus.sqlite 某些版本对重复 ALTER 的报错并非「列已存在」，会被误吞，
+      // 导致 articles.blocks 等列永久缺失，进而让 SELECT 该列的页面整句失败。
+      try { await ensureColumn('articles', 'blocks', 'TEXT') } catch (e) {}
+      try { await ensureColumn('answers', 'draft', 'TEXT') } catch (e) {}
+      try { await ensureColumn('answers', 'status', "TEXT DEFAULT 'graded'") } catch (e) {}
+      try { await ensureColumn('answers', 'comment', 'TEXT') } catch (e) {}
+      try { await ensureColumn('answers', 'correct', 'INTEGER') } catch (e) {}
+      try { await ensureColumn('answers', 'wrong', 'INTEGER DEFAULT 0') } catch (e) {}
       inited = true
     } catch (e) {
       initPromise = null
@@ -687,40 +708,49 @@ function bindParams(sql, params) {
   })
 }
 
-async function execute(sql, params) {
-  await init()
-  const bound = bindParams(sql, params)
+// 底层执行，不触发 init()，专门供 init() 自身使用，避免递归死锁。
+function rawExecuteOne(bound) {
   return new Promise((resolve, reject) => {
     if (!IS_APP) {
       memLoad()
-      // 按分号切分时必须跳过字符串字面量内的分号（模板源码里就有）
       const stmts = splitStatements(String(bound))
       let last = { rowsAffected: 0 }
       for (const s of stmts) last = memExec(s)
       if (last.insertId) mem.lastInsertId = last.insertId
       return resolve(last)
     }
+    const timer = setTimeout(() => reject(new Error('SQL 执行超时')), 8000)
     plus.sqlite.executeSql({
       name: DB_NAME,
       sql: typeof bound === 'string' ? bound : bound.join(';'),
-      success: (res) => resolve(res),
-      fail: (e) => reject(new Error(e.message || 'SQL 执行失败')),
+      success: (res) => { clearTimeout(timer); resolve(res) },
+      fail: (e) => { clearTimeout(timer); reject(new Error(e.message || 'SQL 执行失败')) },
     })
   })
 }
 
-async function select(sql, params) {
-  await init()
-  const bound = bindParams(sql, params)
+// 底层查询，不触发 init()，专门供 init() 自身使用，避免递归死锁。
+function rawSelectOne(bound) {
   return new Promise((resolve, reject) => {
     if (!IS_APP) { memLoad(); return resolve(memSelect(bound)) }
+    const timer = setTimeout(() => reject(new Error('SQL 查询超时')), 8000)
     plus.sqlite.selectSql({
       name: DB_NAME,
       sql: bound,
-      success: (res) => resolve(res || []),
-      fail: (e) => reject(new Error(e.message || 'SQL 查询失败')),
+      success: (res) => { clearTimeout(timer); resolve(res || []) },
+      fail: (e) => { clearTimeout(timer); reject(new Error(e.message || 'SQL 查询失败')) },
     })
   })
+}
+
+async function execute(sql, params) {
+  await init()
+  return rawExecuteOne(bindParams(sql, params))
+}
+
+async function select(sql, params) {
+  await init()
+  return rawSelectOne(bindParams(sql, params))
 }
 
 let writeLock = Promise.resolve()

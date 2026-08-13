@@ -46,9 +46,18 @@ function stripUiNoise(text) {
 
 export function extractArticle(html, baseUrl) {
   const doc = parseDocument(String(html == null ? '' : html))
-  const article = new Readability(doc).parse()
-  if (!article) {
-    return { html: '', plainText: '', wordCount: 0, blocks: [] }
+  const parsed = new Readability(doc).parse()
+  let article
+  if (parsed) {
+    article = parsed
+  } else {
+    const root = doc.documentElement
+    article = {
+      content: String(html == null ? '' : html),
+      documentElement: root,
+      textContent: ((doc.body && doc.body.textContent) || (root && root.textContent) || '').trim(),
+      title: doc.title || '',
+    }
   }
   const content = article.content || ''
 
