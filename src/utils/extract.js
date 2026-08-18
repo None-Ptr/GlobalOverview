@@ -1,11 +1,8 @@
 // 正文管线：@mozilla/readability 抽取正文（依赖浏览器 DOM）
-// 5+App WebView / 浏览器运行时自带 document + DOMParser；
-// 非浏览器环境（node 测试 / App 内未暴露 DOMParser 时）用 linkedom（parse5 系）注入 DOMParser。
 
 import { Readability } from '@mozilla/readability'
 import { parseHTML } from 'linkedom'
 
-// 解析环境若没有全局 DOMParser，则用 linkedom（基于 parse5）提供标准 DOM 实现
 if (typeof DOMParser === 'undefined') {
   globalThis.DOMParser = class {
     parseFromString(html, _mime) {
@@ -22,26 +19,52 @@ function parseDocument(html) {
   return new DOMParser().parseFromString(html, 'text/html')
 }
 
-// 把相对 URL 解析为绝对地址（基于文章页 baseUrl）
 function absUrl(src, base) {
   if (!src || !base) return src || ''
   try { return new URL(src, base).href } catch (e) { return src }
 }
 
-// 过滤明显非内容图：占位/icon/像素/跟踪
 function isContentImage(src, tagHtml) {
   if (!src) return false
   if (src.startsWith('data:image/gif;base64,R0lGOD')) return false
-  if (/\b(icon|logo|pixel|spacer|tracking|badge)\b/i.test(src)) return false
+  if (/^(#|javascript:)/i.test(src)) return false
+  if (/\b(icon|logo|pixel|spacer|tracking|badge|sprite|avatar|favicon|apple-touch-icon)\b/i.test(src)) return false
   if (/\bwidth=["']?\s*(1|2|3|4|5|6|7|8|9|10|1[0-5])\b/i.test(tagHtml || '')) return false
-  return /\.(jpg|jpeg|png|webp|gif|avif|bmp)(\?|$)/i.test(src)
+  if (/\.(css|js|html?|json|xml|svg|woff2?|ttf|eot|mp[34]|pdf)(\?|$)/i.test(src)) return false
+  return true
 }
 
-// 过滤 CMS 图片说明控件的 UI 文本（如 hide caption / toggle caption / show caption），
-// 这些不是正文内容，会污染阅读器和单词统计。
 const UI_CAPTION_RE = /\b(hide|toggle|show)\s+caption\b/gi
 function stripUiNoise(text) {
   return text.replace(UI_CAPTION_RE, '').trim()
+}
+
+// 后处理：把 Readability 输出的粘连文本修复为可阅读的正文。
+// 1) 在「小写|大写」与「数字|大写」边界插入空格（"PROSubscribe" -> "PRO Subscribe"），
+//    缓解 CMS footer/nav 把链接列表拼成连续文本丢失词边界的现象。
+// 2) 过滤明显的 footer/nav 段落：包含版权/sitemap/条款/广告等强信号的行。
+function postProcess(text) {
+  if (!text) return text
+  let out = text.replace(/([a-z])([A-Z])/g, '$1 $2')
+  out = out.replace(/(\d)([A-Z][a-z])/g, '$1 $2')
+  const outLines = []
+  for (const line of out.split(/\n/)) {
+    if (looksLikeFooterLine(line)) continue
+    outLines.push(line)
+  }
+  return outLines.join('\n').replace(/\n{3,}/g, '\n\n').trim()
+}
+
+function looksLikeFooterLine(line) {
+  const t = line.trim()
+  if (!t) return false
+  // 行长守卫：真正的页脚/版权/订阅行都很短。当整篇正文因 fallback 被压成单行时，
+  // 正文中间出现的 "newsletter"/"subscribe" 等词会命中关键字——若不限长，整行正文会被
+  // 误当页脚整段删除，导致"篇幅太短"。长行一律视为正文，不做页脚过滤。
+  if (t.length > 120) return false
+  if (/\b(copyright|©|all rights reserved|privacy policy|terms of service|cookie|sitemap|newsletter|advertise|subscriptions?)\b/i.test(t)) return true
+  if (/^(all rights|your privacy|data is|market data|terms of|about|contact|careers|help|advertise with)/i.test(t)) return true
+  return false
 }
 
 export function extractArticle(html, baseUrl) {
@@ -50,6 +73,17 @@ export function extractArticle(html, baseUrl) {
   let article
   if (parsed) {
     article = parsed
+    // @mozilla/readability 的 parse() 返回值不含 documentElement（它只是构造参数）。
+    // 若缺 documentElement，后续逐段 block 抽取会被整体跳过、退化为单行 textContent。
+    // 这里用 Readability 产出的 content HTML 重建文档片段，恢复真实段落结构。
+    if (!article.documentElement && article.content) {
+      try {
+        const contentDoc = parseDocument(article.content)
+        article.documentElement = contentDoc.body || contentDoc.documentElement || null
+      } catch (e) {
+        article.documentElement = null
+      }
+    }
   } else {
     const root = doc.documentElement
     article = {
@@ -61,15 +95,23 @@ export function extractArticle(html, baseUrl) {
   }
   const content = article.content || ''
 
-  // 保留段落结构：遍历块级元素，用双换行分隔各块，块内空白压成单空格。
-  // 若直接 textContent.replace(/\s+/g,' ') 会把全篇压成一段，导致阅读器无法分段、
-  // 长按选区误选整篇。
   let plainText = ''
   const blocks = []
   if (article.documentElement) {
-    const nodes = article.documentElement.querySelectorAll('p, div, h1, h2, h3, h4, h5, h6, li, blockquote')
+    const nodes = article.documentElement.querySelectorAll('p, div, h1, h2, h3, h4, h5, h6, li, blockquote, picture, figure')
     nodes.forEach((el) => {
-      // 直接子 <img> 单独成块（Readability 有时把图放到 p 里）
+      const collectImg = (img) => {
+        if (!img || img.tagName !== 'IMG') return null
+        const srcset = img.getAttribute('srcset') || img.getAttribute('data-srcset') || ''
+        let best = ''
+        if (srcset) {
+          const parts = srcset.split(',').map((s) => s.trim()).filter(Boolean)
+          for (const p of parts) { const u = p.split(/\s+/)[0]; if (u) best = u }
+        }
+        const raw = best || img.getAttribute('data-src') || img.getAttribute('data-original') || img.getAttribute('src') || ''
+        return { src: absUrl(raw, baseUrl), alt: img.getAttribute('alt') || '' }
+      }
+
       const childImgs = Array.from(el.children || []).filter((c) => c.tagName === 'IMG')
       const t = stripUiNoise((el.textContent || '').replace(/\s+/g, ' ').trim())
       if (t) {
@@ -77,22 +119,39 @@ export function extractArticle(html, baseUrl) {
         blocks.push({ type: 'p', text: t })
       }
       childImgs.forEach((img) => {
-        const src = absUrl(img.getAttribute('src') || img.getAttribute('data-src') || '', baseUrl)
-        if (isContentImage(src, img.outerHTML)) {
-          const a = img.getAttribute('alt') || ''
-          plainText += '\n\n' // 图片不计入纯文本，但保留段间空白
-          blocks.push({ type: 'img', src, alt: a })
+        const got = collectImg(img)
+        if (got && isContentImage(got.src, img.outerHTML)) {
+          plainText += '\n\n'
+          blocks.push({ type: 'img', src: got.src, alt: got.alt })
         }
       })
+
+      if (el.tagName === 'PICTURE') {
+        const sources = Array.from(el.querySelectorAll('source[srcset]'))
+        for (const s of sources) {
+          const ss = s.getAttribute('srcset') || ''
+          let best = ''
+          if (ss) {
+            const parts = ss.split(',').map((x) => x.trim()).filter(Boolean)
+            for (const p of parts) { const u = p.split(/\s+/)[0]; if (u) best = u }
+          }
+          if (best) {
+            const src = absUrl(best, baseUrl)
+            if (isContentImage(src, s.outerHTML)) {
+              plainText += '\n\n'
+              blocks.push({ type: 'img', src, alt: '' })
+              break
+            }
+          }
+        }
+      }
     })
   }
   if (!plainText.trim()) {
-    // 兜底：无块级结构时直接取全文（仍保留段落分隔）
     plainText = stripUiNoise((article.textContent || '').replace(/[ \t]+/g, ' ').replace(/\n{2,}/g, '\n\n').trim())
   }
-  plainText = plainText.replace(/\n{3,}/g, '\n\n').trim()
+  plainText = postProcess(plainText.replace(/\n{3,}/g, '\n\n').trim())
 
-  // 若遍历未产出图片块（结构异常），从 content 中兜底抽取一次
   if (!blocks.some((b) => b.type === 'img')) {
     const imgRe = /<img\b[^>]*>/gi
     let mm

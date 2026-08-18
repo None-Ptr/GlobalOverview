@@ -1,6 +1,9 @@
 <template>
   <view class="page">
     <view class="go-appbar floating">
+      <view class="back" @click="goBack">
+        <GoIcon name="arrow-left" class="back-svg" :size="'52rpx'" />
+      </view>
       <view class="bar-actions">
         <text class="title">错题本（{{ list.length }}）</text>
         <view class="bar-ops">
@@ -71,6 +74,10 @@ const pendingCount = computed(() => list.value.filter((w) => w.status === 'pendi
 
 function safeParse(json, fallback) {
   try { const v = JSON.parse(json); return v == null ? fallback : v } catch (e) { return fallback }
+}
+
+function goBack() {
+  uni.navigateBack({ delta: 1 })
 }
 
 async function load() {

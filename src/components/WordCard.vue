@@ -3,11 +3,14 @@
     <view class="card" @click.stop>
       <view class="card-head">
         <text class="word">{{ displayWord }}</text>
-        <view v-if="!isPhrase && !translateDisabled" class="modes seg">
-          <text class="mode seg-item" :class="{ on: mode === 'en2zh' }" @click="switchMode('en2zh')">中</text>
-          <text class="mode seg-item" :class="{ on: mode === 'en2en' }" @click="switchMode('en2en')">英</text>
+        <view class="modes seg">
+          <text class="mode seg-item speak" @click="emit('speak', props.word)">朗读</text>
+          <template v-if="!isPhrase && !translateDisabled">
+            <text class="mode seg-item" :class="{ on: mode === 'en2zh' }" @click="switchMode('en2zh')">中</text>
+            <text class="mode seg-item" :class="{ on: mode === 'en2en' }" @click="switchMode('en2en')">英</text>
+          </template>
+          <text v-else class="phrase-tag">选区解析</text>
         </view>
-        <text v-else class="phrase-tag">选区解析</text>
         <text class="close btn-close" @click="close">×</text>
       </view>
 
@@ -68,7 +71,7 @@ const props = defineProps({
   context: { type: String, default: '' },
   translateDisabled: { type: Boolean, default: false },
 })
-const emit = defineEmits(['close'])
+const emit = defineEmits(['close', 'speak'])
 
 const mode = ref(props.translateDisabled ? 'en2en' : 'en2zh')
 // 禁用翻译时，强制保持 en2en，避免 prop 变化后 mode 残留 en2zh
@@ -188,6 +191,10 @@ function close() {
   padding: var(--go-sp-1) var(--go-sp-4);
   border-radius: var(--go-r-full);
 }
+.modes { display: flex; align-items: center; gap: var(--go-sp-2); }
+.mode { font-size: var(--go-fs-meta); color: var(--go-on-surface-3); padding: var(--go-sp-1) var(--go-sp-3); border-radius: var(--go-r-full); }
+.mode.on { color: var(--go-on-primary); background: var(--go-primary); }
+.mode.speak { color: var(--go-on-primary); background: var(--go-primary); font-weight: var(--go-fw-medium); }
 .body { padding: var(--go-sp-4) var(--go-sp-6) var(--go-sp-8); flex: 1; }
 .loading {
   color: var(--go-on-surface-3);

@@ -2,14 +2,54 @@ import { request as http } from './http.js'
 import CryptoJS from 'crypto-js'
 import { chat as llmChat, getProfiles } from './llm.js'
 import { protectText, recoverText, formatText } from './textProtect.js'
+import { useAppStore } from '@/stores/app.js'
+import { loadCustomTranslators, DEFAULT_LANG_MAP } from './customTranslate.js'
 const TARGET_LANG = {
   mymemory: { ZH: 'zh-CN', EN: 'en', JA: 'ja', KO: 'ko', FR: 'fr', DE: 'de', RU: 'ru', ES: 'es' },
   libre: { ZH: 'zh', EN: 'en', JA: 'ja', KO: 'ko', FR: 'fr', DE: 'de', RU: 'ru', ES: 'es' },
   baidu: { ZH: 'zh', EN: 'en', JA: 'ja', KO: 'ko', FR: 'fr', DE: 'de', RU: 'ru', ES: 'es' },
 }
+
+// 自定义引擎 id 前缀，用于在回退链 / 引擎列表中区分用户配置的接口
+const CUSTOM_PREFIX = 'custom:'
+
+// 响应 JSON 按点路径/下标提取，如 'data.translation' / 'data.choices[0].text'
+function getPath(obj, path) {
+  if (obj == null || !path) return undefined
+  const segs = String(path).replace(/\[(\d+)\]/g, '.$1').split('.').filter(Boolean)
+  let cur = obj
+  for (const s of segs) {
+    if (cur == null) return undefined
+    cur = cur[s]
+  }
+  return cur
+}
+
+// 占位符替换（URL 形态）：{text} {target} {lang} 均做 URL 编码
+function fillUrl(tpl, text, lang) {
+  return String(tpl || '')
+    .split('{text}').join(encodeURIComponent(text))
+    .split('{target}').join(encodeURIComponent(lang))
+    .split('{lang}').join(encodeURIComponent(lang))
+}
+
+// 占位符替换（JSON body 形态）：{text} 替换为 JSON 转义但不带外层引号的内容，
+// 引号由用户在模板里自行包裹（如 "q": "{text}"），避免与 JSON.stringify 的双引号叠加。
+function fillJson(tpl, text, lang) {
+  const esc = JSON.stringify(text).slice(1, -1) // 转义内部引号/换行，但去掉首尾引号
+  return String(tpl || '')
+    .split('{text}').join(esc)
+    .split('{target}').join(lang)
+    .split('{lang}').join(lang)
+}
+
+function tryParse(r) {
+  if (typeof r !== 'string') return r
+  try { return JSON.parse(r) } catch (e) { return r }
+}
 // 百度翻译开放平台凭据
-let BAIDU_APP_ID = 'abab被吃掉了'
-let BAIDU_KEY = 'abab被吃掉了'
+let BAIDU_APP_ID = '20210915000944730'
+let BAIDU_KEY = 'fp19vk7_V5KW2GSndfd5'
 export function setBaiduCreds(appId, key) {
   if (appId) BAIDU_APP_ID = String(appId)
   if (key) BAIDU_KEY = String(key)
@@ -20,8 +60,6 @@ export function setLibreUrl(url, apiKey = '') {
   if (url) LIBRE_URL = url.replace(/\/+$/, '') + '/translate'
   LIBRE_API_KEY = apiKey || ''
 }
-
-const ENGINE_ORDER = ['baidu', 'mymemory', 'libre', 'llm']
 
 export const ENGINE_NAMES = {
   auto: '自动',
@@ -129,11 +167,88 @@ async function translate_llm(text, target) {
   return out.trim()
 }
 
+// ---------- 自定义翻译接口（通用 HTTP 适配器，由用户配置驱动） ----------
+// cfg 字段：
+//   name, url(必填，占位符 {text} {target} {lang}),
+//   method('GET'|'POST', 默认 POST), headers(JSON 对象字符串),
+//   body(POST 的 JSON 模板，占位符同上；缺省为 { q, target, source } 契约),
+//   resultPath(响应提取路径，默认 'data.translation'),
+//   langMap(JSON 目标语言映射，可选)
+export async function translate_custom(cfg, text, target) {
+  let langMap = null
+  try { langMap = JSON.parse(cfg.langMap || 'null') } catch (e) { langMap = null }
+  const map = langMap && typeof langMap === 'object' ? langMap : DEFAULT_LANG_MAP
+  const lang = map[target] || map.ZH || 'zh'
+
+  const method = String(cfg.method || 'POST').toUpperCase()
+  const options = { url: fillUrl(cfg.url, text, lang), method }
+
+  if (method === 'GET') {
+    options.dataType = 'text'
+  } else {
+    options.header = { 'Content-Type': 'application/json' }
+    try { Object.assign(options.header, JSON.parse(cfg.headers || '{}')) } catch (e) { /* 忽略非法 header */ }
+    if (cfg.body) {
+      try { options.data = JSON.parse(fillJson(cfg.body, text, lang)) }
+      catch (e) { throw new Error('请求体模板不是合法 JSON') }
+    } else {
+      // 无自定义 body 时按常见翻译 API 契约发送
+      options.data = { q: text, target: lang, source: 'en' }
+    }
+  }
+
+  return baseTranslate(
+    options,
+    (r) => tryParse(r),
+    (out) => {
+      const v = getPath(out, cfg.resultPath || 'data.translation')
+      return v != null && String(v).length
+        ? { status: true, data: String(v) }
+        : { status: false, message: '翻译接口返回异常（resultPath 未命中）' }
+    },
+    3,
+    1000
+  )
+}
+
 const ENGINE_MAP = {
   baidu: translate_baidu,
   mymemory: translate_mymemory,
   libre: translate_libre,
   llm: translate_llm,
+}
+
+// 解析引擎 id 到执行函数：内置引擎直取，custom: 前缀动态查配置
+function resolveFn(name) {
+  if (name.startsWith(CUSTOM_PREFIX)) {
+    const id = name.slice(CUSTOM_PREFIX.length)
+    const cfg = loadCustomTranslators().find((t) => t.id === id)
+    return cfg ? (text, target) => translate_custom(cfg, text, target) : null
+  }
+  return ENGINE_MAP[name] || null
+}
+
+// 引擎显示名（含自定义），供 UI 动态生成选择列表
+export function getEngineNames() {
+  const names = { ...ENGINE_NAMES }
+  for (const t of loadCustomTranslators()) names[CUSTOM_PREFIX + t.id] = t.name || '自定义'
+  return names
+}
+
+// 回退顺序：preferred 指定单一引擎（含 custom:x）；auto 时内置优先、自定义殿后
+function getEngineOrder(preferred) {
+  const base = ['baidu', 'mymemory', 'libre', 'llm']
+  const customs = loadCustomTranslators().map((t) => CUSTOM_PREFIX + t.id)
+  if (preferred && preferred !== 'auto') return [preferred]
+  return [...base, ...customs]
+}
+
+// 读取用户当前选中的翻译引擎（store.reader.transEngine），未选则 auto
+function defaultEngine() {
+  try {
+    const store = useAppStore()
+    return (store.reader && store.reader.transEngine) || 'auto'
+  } catch (e) { return 'auto' }
 }
 
 function splitText(text, limit = TRANSLATE_SPLIT_LIMIT) {
@@ -158,7 +273,7 @@ function splitText(text, limit = TRANSLATE_SPLIT_LIMIT) {
 
 export async function translate(text, opts = {}) {
   const target = opts.target || 'ZH'
-  const engine = opts.engine || 'auto'
+  const engine = opts.engine || defaultEngine() || 'auto'
   const raw = String(text || '').trim()
   if (!raw) return ''
 
@@ -170,10 +285,12 @@ export async function translate(text, opts = {}) {
     blocks = [protectedText]
   }
 
-  const order = engine === 'auto' ? ENGINE_ORDER : (ENGINE_MAP[engine] ? [engine] : ENGINE_ORDER)
+  const order = getEngineOrder(engine)
 
   let lastErr
   for (const name of order) {
+    const fn = resolveFn(name)
+    if (!fn) continue
     try {
       let parts
       if (name === 'baidu') {
@@ -184,7 +301,7 @@ export async function translate(text, opts = {}) {
           if (blocks.length > 1) await new Promise((r) => setTimeout(r, 1100))
         }
       } else {
-        parts = await Promise.all(blocks.map((b) => ENGINE_MAP[name](b, target)))
+        parts = await Promise.all(blocks.map((b) => fn(b, target)))
       }
       const joined = parts.join('\n\n')
       return formatText(recoverText(joined, pstore))

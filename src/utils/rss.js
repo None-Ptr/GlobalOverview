@@ -55,12 +55,20 @@ function getLink(node) {
 }
 
 export async function fetchFeed(url) {
-  const xml = await fetchText(url)
+  // 防御历史脏数据：数据库里可能存了 HTML 实体转义的 URL（&amp; → &）
+  const cleanUrl = String(url || '').replace(/&amp;/gi, '&').trim()
+  if (!cleanUrl) throw new Error('订阅源 URL 为空')
+  const xml = await fetchText(cleanUrl)
   if (typeof xml !== 'string' || !xml.trim()) throw new Error('订阅源返回空内容')
   const json = parser.parse(xml)
-  const channel = (json.rss && json.rss.channel) || json.feed || json
+  // RSS 2.0: <rss><channel><item>…；Atom: <feed><entry>…；
+  // RSS 1.0/RDF: <rdf:RDF> 下 <channel> 与 <item> 平级（如 Nature）。
+  const root = json.rss || json.feed || json['rdf:RDF'] || json
+  const channel = root.channel || root
   if (!channel) throw new Error('无法解析订阅源格式')
-  const rawItems = asArray(channel.item || channel.entry || [])
+  const rawItems = asArray(
+    channel.item || root.item || channel.entry || root.entry || []
+  )
   const items = rawItems.map((it) => {
     const guid = toText(it.guid || it.id) || toText(it.link) || ('__' + toText(it.title)) || ''
     const link = getLink(it.link)

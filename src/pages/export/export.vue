@@ -1,6 +1,9 @@
 <template>
   <view class="page">
     <view class="go-appbar floating">
+      <view class="back" @click="goBack">
+        <GoIcon name="arrow-left" class="back-svg" :size="'52rpx'" />
+      </view>
       <text class="go-appbar__title">导出</text>
     </view>
     <scroll-view scroll-y class="scroll">
@@ -109,6 +112,10 @@ onMounted(async () => {
   }
   await refresh()
 })
+
+function goBack() {
+  uni.navigateBack({ delta: 1 })
+}
 
 function switchMode(m) {
   mode.value = m

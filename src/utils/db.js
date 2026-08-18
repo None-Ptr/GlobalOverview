@@ -9,7 +9,8 @@ const MEM_KEY = 'go_mem_db'
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS feeds (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  title TEXT, url TEXT UNIQUE, category TEXT, addedAt INTEGER
+  title TEXT, url TEXT UNIQUE, category TEXT, addedAt INTEGER,
+  failCount INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS feed_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -20,7 +21,8 @@ CREATE TABLE IF NOT EXISTS feed_items (
 CREATE TABLE IF NOT EXISTS articles (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   guid TEXT UNIQUE, title TEXT, author TEXT, sourceUrl TEXT,
-  html TEXT, plainText TEXT, blocks TEXT, wordCount INTEGER, capturedAt INTEGER
+  html TEXT, plainText TEXT, blocks TEXT, wordCount INTEGER, capturedAt INTEGER,
+  tts_audio TEXT, tts_voice TEXT
 );
 CREATE TABLE IF NOT EXISTS question_sets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -682,11 +684,14 @@ async function init() {
       // 真机 plus.sqlite 某些版本对重复 ALTER 的报错并非「列已存在」，会被误吞，
       // 导致 articles.blocks 等列永久缺失，进而让 SELECT 该列的页面整句失败。
       try { await ensureColumn('articles', 'blocks', 'TEXT') } catch (e) {}
+      try { await ensureColumn('articles', 'tts_audio', 'TEXT') } catch (e) {}
+      try { await ensureColumn('articles', 'tts_voice', 'TEXT') } catch (e) {}
       try { await ensureColumn('answers', 'draft', 'TEXT') } catch (e) {}
       try { await ensureColumn('answers', 'status', "TEXT DEFAULT 'graded'") } catch (e) {}
       try { await ensureColumn('answers', 'comment', 'TEXT') } catch (e) {}
       try { await ensureColumn('answers', 'correct', 'INTEGER') } catch (e) {}
       try { await ensureColumn('answers', 'wrong', 'INTEGER DEFAULT 0') } catch (e) {}
+      try { await ensureColumn('feeds', 'failCount', 'INTEGER DEFAULT 0') } catch (e) {}
       inited = true
     } catch (e) {
       initPromise = null
@@ -873,5 +878,30 @@ async function loadHistory(questionId) {
   ) || []
 }
 
+// 读取文章已缓存的 TTS 音频（base64 mp3）与对应音色
+async function loadTtsCache(id) {
+  try {
+    const rows = await select(`SELECT tts_audio, tts_voice FROM articles WHERE id = ${sqlVal(id)} LIMIT 1`)
+    const row = rows && rows[0]
+    if (row && row.tts_audio) return { audio: row.tts_audio, voice: row.tts_voice || '' }
+    return null
+  } catch (e) {
+    console.error(e)
+    return null
+  }
+}
+
+// 将合成好的 TTS 音频写入文章行，与原文一起缓存
+async function saveTtsCache(id, audio, voice) {
+  try {
+    await execute(`UPDATE articles SET tts_audio = ${sqlVal(audio)}, tts_voice = ${sqlVal(voice)} WHERE id = ${sqlVal(id)}`)
+    return true
+  } catch (e) {
+    console.error(e)
+    return false
+  }
+}
+
 export const db = { init, execute, select, insertReturnId, clearAll, clearCache,
-  loadDraft, loadDrafts, saveDraft, clearDrafts, loadHistory, sqlVal, safeGuid, IS_APP }
+  loadDraft, loadDrafts, saveDraft, clearDrafts, loadHistory,
+  loadTtsCache, saveTtsCache, sqlVal, safeGuid, IS_APP }

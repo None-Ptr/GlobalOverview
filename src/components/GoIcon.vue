@@ -61,6 +61,9 @@ const map = {
   export: 'upload',
   star: 'star',
   brain: 'color',
+  translate: 'compose', // 翻译/语言接口
+  tts: 'sound',          // 朗读/语音
+  stop: 'closeempty',    // 停止
 }
 
 const type = map[props.name] || 'help'

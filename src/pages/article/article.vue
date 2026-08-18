@@ -12,6 +12,9 @@
         <view class="go-icon-btn" @click="addToPlan" title="加入计划">
           <GoIcon name="bookmark" :size="'52rpx'" />
         </view>
+        <view class="go-icon-btn" :class="{ on: ttsPlaying }" @click="toggleReadAloud" :title="ttsPlaying ? '停止朗读' : '朗读全文（整篇已缓存则直接播放）'">
+          <GoIcon :name="ttsPlaying ? 'stop' : 'tts'" :size="'52rpx'" />
+        </view>
         <view class="go-icon-btn" @click="showSettings = !showSettings" title="设置">
           <GoIcon name="settings" :size="'52rpx'" />
         </view>
@@ -61,10 +64,23 @@
             :class="{ on: reader.transEngine === e.id }"
             @click="setTransEngine(e.id)"
           >{{ e.name }}</text>
+          <text class="eng-chip eng-chip--manage" @click="manageTransEngines">⚙ 管理</text>
         </view>
       </view>
       <view class="set-row">
-        <text class="set-tip">单击查词 · 长按整句 · 工具栏「选择」可点选多词翻译</text>
+        <text class="set-label">音色</text>
+        <view class="engine-pick">
+          <text
+            v-for="v in ttsVoices"
+            :key="v.id"
+            class="eng-chip"
+            :class="{ on: ttsVoice === v.id }"
+            @click="setVoice(v.id)"
+          >{{ v.name }}</text>
+        </view>
+      </view>
+      <view class="set-row">
+        <text class="set-tip">单击查词 · 长按整句 · 工具栏「选择」可点选多词翻译 · 朗读按钮可播放全文</text>
       </view>
     </view>
 
@@ -96,7 +112,7 @@
         <view v-else-if="b.type === 'img'" v-show="!b._err" class="article-img" @click="onImgTap(b.src)">
           <image
             class="article-img__el"
-            :src="b.src"
+            :src="imgSrc(b)"
             :mode="'widthFix'"
             :lazy-load="true"
             @error="onImgError(bi)"
@@ -110,6 +126,7 @@
     <!-- 选区浮动操作条 -->
     <view v-if="selection.text || selectedText" class="sel-bar go-slide-up">
       <text class="sel-text">{{ selectionPreview }}</text>
+      <text class="sel-btn" @click="readSelection">朗读</text>
       <text class="sel-btn" @click="lookupSelection">查询</text>
       <text class="sel-btn ghost" @click="clearSelection">取消</text>
     </view>
@@ -120,12 +137,22 @@
       :context="activeContext"
       :translate-disabled="isQuiz"
       @close="wordVisible = false"
+      @speak="onWordSpeak"
     />
+
+    <!-- TTS 合成中遮罩 -->
+    <view v-if="ttsSynthesizing" class="tts-loading" @click.stop="cancelTtsSynthesis">
+      <view class="tts-loading__box">
+        <PolySpinner />
+        <text class="tts-loading__text">正在合成语音…</text>
+        <button class="tts-loading__cancel" @click.stop="cancelTtsSynthesis">取消</button>
+      </view>
+    </view>
   </view>
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { onLoad, onShow } from '@dcloudio/uni-app'
 import { db } from '@/utils/db.js'
 import { useAppStore } from '@/stores/app.js'
@@ -136,6 +163,9 @@ import GoIcon from '@/components/GoIcon.vue'
 import { useTransition } from '@/composables/useTransition'
 import { fetchText } from '@/utils/http.js'
 import { extractArticle } from '@/utils/extract.js'
+import { getEngineNames } from '@/utils/translate.js'
+import { loadCustomTranslators } from '@/utils/customTranslate.js'
+import { speak as ttsSpeak, stopTts, loadTtsConfig, saveTtsConfig, TTS_VOICES, initTtsConfig } from '@/utils/tts.js'
 
 const transition = useTransition('secondary')
 onShow(() => transition.onEnter())
@@ -199,6 +229,93 @@ function toggleSelToken(tk, pi, ti) {
 }
 
 const reader = computed(() => store.reader)
+
+/* ---------------- 朗读（TTS） ---------------- */
+const ttsPlaying = ref(false)
+const ttsSynthesizing = ref(false)
+const ttsVoice = ref('en-US-JennyNeural')
+const ttsVoices = TTS_VOICES
+
+function syncTts() {
+  const c = loadTtsConfig()
+  ttsVoice.value = c.presetVoice || 'en-US-JennyNeural'
+}
+// cacheKey 决定 TTS 本地缓存归属：
+//   'article:'+id  -> 整篇文章（与文章一起持久化）
+//   'sent:'+文本   -> 单个句子（选句播放）
+//   'word:'+单词   -> 单个单词（选词播放）
+async function readText(text, cacheKey = null) {
+  if (!text || !text.trim()) {
+    uni.showToast({ title: '无可朗读内容', icon: 'none' })
+    return
+  }
+  stopTts()
+  const cfg = loadTtsConfig()
+  ttsSynthesizing.value = true
+  try {
+    await ttsSpeak(text, cfg, {
+      cacheKey: cacheKey != null ? String(cacheKey) : undefined,
+      onReady: () => {
+        // 后端已返回音频：立即关闭"合成中"遮罩；App 端可能还在写临时文件
+        ttsSynthesizing.value = false
+      },
+      onStart: () => {
+        ttsSynthesizing.value = false
+        ttsPlaying.value = true
+      },
+      onEnd: () => {
+        ttsPlaying.value = false
+      },
+      onError: (e) => {
+        ttsSynthesizing.value = false
+        ttsPlaying.value = false
+        if (e && e.message) uni.showToast({ title: e.message, icon: 'none' })
+      },
+    })
+    // 整篇朗读：把缓存标记写入文章行（"与文本一起缓存"），音频文件已在本地
+    if (cacheKey != null && typeof cacheKey === 'string' && cacheKey.startsWith('article:')) {
+      const id = cacheKey.slice('article:'.length)
+      db.saveTtsCache(id, cacheKey, cfg.presetVoice).catch(() => {})
+    }
+  } catch (e) {
+    uni.showToast({ title: e.message || '朗读失败', icon: 'none' })
+  } finally {
+    ttsSynthesizing.value = false
+  }
+}
+function cancelTtsSynthesis() {
+  stopTts()
+  ttsSynthesizing.value = false
+  ttsPlaying.value = false
+}
+function toggleReadAloud() {
+  if (ttsPlaying.value || ttsSynthesizing.value) {
+    cancelTtsSynthesis()
+    return
+  }
+  const full = paragraphs.value.join('\n\n').trim()
+  if (!full) {
+    uni.showToast({ title: '暂无正文', icon: 'none' })
+    return
+  }
+  readText(full, 'article:' + articleId.value)
+}
+function readSelection() {
+  const text = selectedText.value || selection.value.text
+  if (!text) return
+  readText(text, 'sent:' + text)
+  clearSelection()
+}
+// 词卡「朗读」：按单词缓存
+function onWordSpeak(word) {
+  if (!word) return
+  readText(word, 'word:' + word)
+}
+function setVoice(v) {
+  ttsVoice.value = v
+  const c = loadTtsConfig()
+  saveTtsConfig({ ...c, presetVoice: v })
+}
 const readerStyle = computed(() => ({
   fontSize: reader.value.fontSize + 'px',
   lineHeight: String(reader.value.lineHeight),
@@ -337,9 +454,20 @@ const tokenizedBlocks = computed(() => blocks.value.map((b) =>
   b.type === 'p' ? { ...b, toks: tokenize(b.text) } : b
 ))
 
-// 图片加载失败：隐藏该图块（避免裂图占位占版面）
+// 图片 URL：失败重试时追加缓存穿透参数，触发 <image> 重新加载
+function imgSrc(b) {
+  if (!b._retry) return b.src
+  const sep = b.src.includes('?') ? '&' : '?'
+  return b.src + sep + '_cb=' + b._retry
+}
+
+// 图片加载失败：先重试（最多 2 次，追加缓存穿透参数），仍失败才隐藏该图块
 function onImgError(bi) {
-  if (blocks.value[bi]) blocks.value[bi]._err = true
+  const b = blocks.value[bi]
+  if (!b) return
+  if (!b._retry) b._retry = 1
+  else if (b._retry < 2) b._retry += 1
+  else b._err = true
 }
 
 // 取词长按：选中该词所在完整句子（句子边界按 .!? 切分），弹选区条供查询
@@ -381,6 +509,10 @@ function sentenceAround(p, ti) {
 function tokenize(p) {
   if (!p) return []
   const out = []
+  // 先归一化不可见分隔符：网页正文常见零宽空格(ZWSP \u200B)、软连字符、BOM 等，
+  // 它们不匹配 \s 也不会被当作单词，会作为独立的「零宽」token 渲染，导致两个单词看似粘在一起。
+  // 统一替换成普通空格（后续再转为 NBSP），保证每个词之间都有可见间隙。
+  p = String(p).replace(/[\u200b-\u200f\u2060\u00ad\ufeff]/g, ' ')
   const re = /(\s+|[A-Za-z][A-Za-z'’-]*[A-Za-z]|[A-Za-z]|[^A-Za-z\s]+)/g
   let m
   while ((m = re.exec(p)) !== null) {
@@ -465,16 +597,29 @@ function changeLine(d) {
   store.setReader({ lineHeight: v })
 }
 
-// 翻译引擎选项（与 translate.js 的 ENGINE_NAMES / ENGINE_ORDER 对齐）
-const engineList = [
-  { id: 'auto', name: '自动' },
-  { id: 'baidu', name: '百度翻译' },
-  { id: 'mymemory', name: 'MyMemory' },
-  { id: 'libre', name: 'LibreTranslate' },
-  { id: 'llm', name: 'LLM' },
-]
+// 翻译引擎选项：内置 + 用户自定义接口，动态生成（与 translate.js getEngineNames 对齐）
+const engineList = computed(() => {
+  const names = getEngineNames()
+  return Object.keys(names).map((id) => ({ id, name: names[id] }))
+})
 function setTransEngine(id) {
   store.setReader({ transEngine: id || 'auto' })
+}
+// 管理自定义翻译接口：列出已配置项可编辑，或新增
+function manageTransEngines() {
+  const customs = loadCustomTranslators()
+  const items = customs.map((c) => '编辑「' + (c.name || '未命名') + '」')
+  items.push('＋ 新增接口')
+  uni.showActionSheet({
+    itemList: items,
+    success: (res) => {
+      if (res.tapIndex < customs.length) {
+        uni.navigateTo({ url: '/pages/translate-form/translate-form?id=' + customs[res.tapIndex].id })
+      } else {
+        uni.navigateTo({ url: '/pages/translate-form/translate-form' })
+      }
+    },
+  })
 }
 
 function goBack() {
@@ -512,7 +657,13 @@ async function addToPlan() {
 
 onMounted(() => {
   store.initReader()
+  initTtsConfig()
+  syncTts()
   loadArticle()
+})
+
+onUnmounted(() => {
+  stopTts()
 })
 </script>
 
@@ -566,6 +717,42 @@ onMounted(() => {
 .set-label { width: 96rpx; font-size: var(--go-fs-body-sm); color: var(--go-on-surface); }
 .set-tip { font-size: var(--go-fs-meta); color: var(--go-on-surface-3); }
 .stepper { display: flex; align-items: center; margin-left: auto; gap: var(--go-sp-2); }
+
+.tts-loading {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.32);
+  &__box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--go-sp-4);
+    padding: var(--go-sp-8) var(--go-sp-10);
+    background: var(--go-surface);
+    border-radius: var(--go-r-lg);
+    box-shadow: var(--go-elev-2);
+  }
+  &__text {
+    font-size: var(--go-fs-body);
+    color: var(--go-on-surface);
+  }
+  &__cancel {
+    margin: 0;
+    padding: var(--go-sp-2) var(--go-sp-6);
+    font-size: var(--go-fs-body-sm);
+    color: var(--go-primary);
+    background: transparent;
+    border: 1rpx solid var(--go-primary);
+    border-radius: var(--go-r-full);
+    line-height: 1.6;
+    &::after { display: none; }
+    &:active { background: var(--go-primary-95); }
+  }
+}
 .step {
   display: inline-flex;
   align-items: center;
@@ -581,6 +768,7 @@ onMounted(() => {
 .set-val { font-size: var(--go-fs-body-sm); min-width: 80rpx; text-align: center; color: var(--go-on-surface-3); }
 
 .engine-pick { display: flex; gap: var(--go-sp-2); margin-left: auto; flex-wrap: wrap; justify-content: flex-end; }
+.eng-chip--manage { color: var(--go-primary); border-style: dashed; }
 .eng-chip {
   padding: var(--go-sp-1) var(--go-sp-4);
   font-size: var(--go-fs-meta);
@@ -630,6 +818,10 @@ onMounted(() => {
   background: transparent;
   max-width: 720rpx;
   margin: 0 auto;
+}
+/* 段落间距：没有 margin 的话多个段落紧贴在一起，视觉上像没分段 */
+.article-p {
+  margin-bottom: var(--go-sp-5);
 }
 .tok { line-height: inherit; white-space: pre; }
 .tok--word {
@@ -716,7 +908,7 @@ onMounted(() => {
   right: var(--go-sp-4);
   bottom: calc(var(--go-nav-h) + var(--go-safe-bottom) + var(--go-sp-4));
   // 用纯实色深底，避免依赖 color-mix()（部分 5+App webview 不支持该函数会导致规则失效、文字变透明）
-  background: #322f2b;
+  background: #2D2A35;
   backdrop-filter: blur(20rpx);
   border-radius: var(--go-r-lg);
   padding: var(--go-sp-3) var(--go-sp-4);

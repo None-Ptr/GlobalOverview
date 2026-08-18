@@ -2,15 +2,15 @@
   "pages": [
     {
       "path": "pages/reading/reading",
-      "style": { "navigationBarTitleText": "阅读" }
+      "style": { "navigationStyle": "custom" }
     },
     {
       "path": "pages/article/article",
-      "style": { "navigationBarTitleText": "文章" }
+      "style": { "navigationStyle": "custom" }
     },
     {
       "path": "pages/plan/plan",
-      "style": { "navigationBarTitleText": "计划" }
+      "style": { "navigationStyle": "custom" }
     },
     {
       "path": "pages/words/words",
@@ -18,30 +18,38 @@
     },
     {
       "path": "pages/mine/mine",
-      "style": { "navigationBarTitleText": "我的" }
+      "style": { "navigationStyle": "custom" }
     },
     {
       "path": "pages/quiz/quiz",
-      "style": { "navigationBarTitleText": "答题" }
+      "style": { "navigationStyle": "custom" }
     },
     {
       "path": "pages/wrong/wrong",
-      "style": { "navigationBarTitleText": "错题本" }
+      "style": { "navigationStyle": "custom" }
     },
     {
       "path": "pages/export/export",
-      "style": { "navigationBarTitleText": "导出 PDF" }
+      "style": { "navigationStyle": "custom" }
     },
     {
       "path": "pages/model-form/model-form",
-      "style": { "navigationBarTitleText": "模型配置" }
+      "style": { "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/translate-form/translate-form",
+      "style": { "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/tts-form/tts-form",
+      "style": { "navigationStyle": "custom" }
     }
   ],
   "globalStyle": {
     "navigationBarTextStyle": "black",
     "navigationBarTitleText": "GlobalOverview",
-    "navigationBarBackgroundColor": "#F3EBDE",
-    "backgroundColor": "#F3EBDE",
+    "navigationBarBackgroundColor": "#F2F0F7",
+    "backgroundColor": "#F2F0F7",
     "animationType": "pop-in",
     "animationDuration": 280
   }

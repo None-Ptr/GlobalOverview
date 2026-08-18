@@ -36,6 +36,56 @@
         <button class="go-btn go-btn--tonal go-btn--block add-model" @click="addModel">＋ 新增模型</button>
       </view>
 
+      <!-- 翻译接口配置 -->
+      <view class="go-section" data-stagger>
+        <view class="go-section__title">翻译接口</view>
+        <view v-if="translators.length" class="go-card">
+          <view
+            v-for="t in translators"
+            :key="t.id"
+            class="go-row"
+            @click="editTranslator(t)"
+          >
+            <view class="go-row__icon">
+              <GoIcon name="translate" class="mi" :size="'48rpx'" />
+            </view>
+            <view class="go-row__body">
+              <view class="go-row__title">{{ t.name }}</view>
+              <view class="go-row__sub">{{ t.method }} · {{ t.resultPath }}</view>
+            </view>
+            <view class="go-row__trail">
+              <view class="go-icon-btn danger" @click.stop="deleteTranslator(t)">
+                <GoIcon name="trash" class="mi" :size="'48rpx'" />
+              </view>
+              <view class="go-row__chevron mi">›</view>
+            </view>
+          </view>
+        </view>
+        <view v-else class="go-empty go-empty--card">
+          <text class="go-empty__desc">尚未配置自定义翻译接口，可添加第三方翻译 API</text>
+        </view>
+        <button class="go-btn go-btn--tonal go-btn--block add-model" @click="addTranslator">＋ 新增翻译接口</button>
+      </view>
+
+      <!-- 语音朗读（TTS）配置 -->
+      <view class="go-section" data-stagger>
+        <view class="go-section__title">语音朗读</view>
+        <view class="go-card">
+          <view class="go-row" @click="editTts">
+            <view class="go-row__icon">
+              <GoIcon name="tts" class="mi" :size="'48rpx'" />
+            </view>
+            <view class="go-row__body">
+              <view class="go-row__title">朗读服务</view>
+              <view class="go-row__sub">{{ ttsLabel }}</view>
+            </view>
+            <view class="go-row__trail">
+              <view class="go-row__chevron mi">›</view>
+            </view>
+          </view>
+        </view>
+      </view>
+
       <!-- 全局备考目标 -->
       <view class="go-section" data-stagger>
         <view class="go-section__title">难度设置</view>
@@ -97,17 +147,20 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { onShow } from '@dcloudio/uni-app'
 import { useAppStore } from '@/stores/app.js'
 import BottomNav from '@/components/BottomNav.vue'
 import GoIcon from '@/components/GoIcon.vue'
 import { db } from '@/utils/db.js'
 import { EXAM_MAP } from '@/utils/quiz.js'
+import { loadCustomTranslators, deleteTranslator as removeTranslator } from '@/utils/customTranslate.js'
+import { loadTtsConfig } from '@/utils/tts.js'
 
 const store = useAppStore()
 
 const models = ref([])
+const translators = ref([])
 const targetLevel = ref('CET6')
 // 考试档位：从 quiz.js 的 EXAM_MAP 动态读取，单一事实来源
 const levels = Object.keys(EXAM_MAP)
@@ -116,6 +169,21 @@ const MODELS_KEY = 'go_llm_models'
 
 function loadModels() {
   models.value = uni.getStorageSync(MODELS_KEY) || []
+}
+function loadTranslators() {
+  translators.value = loadCustomTranslators()
+}
+
+const ttsCfg = ref({ apiKey: '', presetVoice: 'en-US-JennyNeural' })
+const ttsLabel = computed(() => {
+  if (ttsCfg.value.apiKey) return 'Edge TTS · ' + (ttsCfg.value.presetVoice || '未设置音色')
+  return '未配置 TTS 密钥'
+})
+function loadTts() {
+  ttsCfg.value = loadTtsConfig()
+}
+function editTts() {
+  uni.navigateTo({ url: '/pages/tts-form/tts-form' })
 }
 async function loadGoal() {
   const r = await db.select(`SELECT value FROM kv WHERE key='targetLevel'`)
@@ -148,6 +216,25 @@ async function deleteModel(m) {
       if (res.confirm) {
         models.value = models.value.filter((x) => x.id !== m.id)
         uni.setStorageSync(MODELS_KEY, models.value)
+      }
+    }
+  })
+}
+function addTranslator() {
+  uni.navigateTo({ url: '/pages/translate-form/translate-form' })
+}
+function editTranslator(t) {
+  uni.navigateTo({ url: '/pages/translate-form/translate-form?id=' + t.id })
+}
+async function deleteTranslator(t) {
+  uni.showModal({
+    title: '删除翻译接口',
+    content: `确认删除「${t.name}」？`,
+    success: (res) => {
+      if (res.confirm) {
+        removeTranslator(t.id)
+        translators.value = loadCustomTranslators()
+        uni.showToast({ title: '已删除', icon: 'success' })
       }
     }
   })
@@ -198,6 +285,8 @@ onMounted(async () => {
 // 从模型配置页返回（tab 页被缓存，onMounted 不会重跑），需在此刷新列表
 onShow(async () => {
   loadModels()
+  loadTranslators()
+  loadTts()
   loadGoal()
 })
 </script>

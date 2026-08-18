@@ -27,85 +27,80 @@ onHide(() => {})
    表现就是图标/文字/按钮全部"消失"。 */
 
 :root {
-  /* 主色系（暖陶 Warm Clay · 4 色基调，去亮黄偏奶灰） */
-  --go-primary: #b46060;
-  --go-primary-95: #fbeee6;
-  --go-primary-90: #f3e1d5;
-  --go-primary-80: #ebcfbc;
-  --go-primary-60: #d99f8f;
-  --go-primary-40: #bd7373;
-  --go-primary-20: #8a4242;
-  --go-on-primary: #fff8f1;
-  --go-on-primary-variant: #5a2626;
+  /* 主色系（蓝紫 Berry 盘：#5AA4DE → #A53071，主信号色 #8B65B5） */
+  --go-primary: #8B65B5;
+  --go-primary-95: #F3EDF9;
+  --go-primary-90: #E7DCF2;
+  --go-primary-80: #D4BCE9;
+  --go-primary-60: #B899DA;
+  --go-primary-40: #9F76C8;
+  --go-primary-20: #6A4294;
+  --go-on-primary: #FFFFFF;
+  --go-on-primary-variant: #2D0A45;
+  --go-on-primary-container: #4A1F6A;
 
-  --go-secondary: #c98a5e;
-  --go-on-secondary: #fff8f1;
-  --go-secondary-container: #f5c4a5;
-  --go-on-secondary-container: #4d2e1c;
+  --go-secondary: #5AA4DE;
+  --go-on-secondary: #FFFFFF;
+  --go-secondary-container: #D6EBF9;
+  --go-on-secondary-container: #003A5C;
 
-  --go-tertiary: #e08a6a;
-  --go-on-tertiary: #fff8f1;
-  --go-tertiary-container: #f5d2bb;
-  --go-on-tertiary-container: #5a2e1c;
+  --go-tertiary: #A53071;
+  --go-on-tertiary: #FFFFFF;
+  --go-tertiary-container: #F5D6E5;
+  --go-on-tertiary-container: #5A0C32;
 
-  /* 中性 / 表面 */
-  --go-bg: #ece1cf;
-  --go-surface: #fcf6ec;
-  --go-surface-1: #f6ecdd;
-  --go-surface-2: #ecdcc5;
-  --go-surface-variant: #e2cfb4;
-  --go-surface-raised: #fcf6ec;
-  --go-on-surface: #322f2b;
-  --go-on-surface-2: #655a50;
-  --go-on-surface-3: #958878;
-  --go-on-surface-disabled: #bcb0a3;
-  --go-outline: #d8c6ad;
-  --go-outline-strong: #bca78c;
-  --go-on-bg: #322f2b;
+  /* 中性 / 表面（重新设计：淡薰衣草灰底，匹配蓝紫盘） */
+  --go-bg: #F2F0F7;
+  --go-surface: #FAF9FC;
+  --go-surface-1: #EAE8F2;
+  --go-surface-2: #E0DDE9;
+  --go-surface-variant: #D6D3E3;
+  --go-surface-raised: #FAF9FC;
+  --go-on-surface: #2D2A35;
+  --go-on-surface-2: #5E5A6A;
+  --go-on-surface-3: #8A8596;
+  --go-on-surface-disabled: #B5B2BF;
+  --go-outline: #D5D2E0;
+  --go-outline-strong: #B8B4C5;
+  --go-on-bg: #2D2A35;
 
   /* 语义色 */
-  --go-success: #4f7d4c;
+  --go-success: #2E7D62;
   --go-on-success: #ffffff;
-  --go-warning: #a8702f;
+  --go-warning: #B88A00;
   --go-on-warning: #ffffff;
-  --go-danger: #a8362a;
+  --go-danger: #A53071;
   --go-on-danger: #ffffff;
-  --go-error: #a8362a;
-  --go-info: #b46060;
+  --go-error: #A53071;
+  --go-info: #5AA4DE;
 
-  --go-bg-glow: radial-gradient(120% 60% at 50% -10%, rgba(180, 96, 96, 0.10), rgba(255, 191, 155, 0.06) 38%, transparent 70%);
+  --go-bg-glow: radial-gradient(120% 60% at 50% -10%, rgba(139, 101, 181, 0.10), rgba(90, 164, 222, 0.05) 38%, transparent 70%);
 
-  /* 主色加深（AA 对比度 4.5:1+） */
-  --go-primary: #a85454;
-  --go-on-primary: #ffffff;
-  --go-on-primary-variant: #4a201f;
-  --go-on-primary-container: #8c3b24;
-
-  --go-sel: rgba(168, 84, 84, 0.16);
-  --go-sel-strong: rgba(168, 84, 84, 0.30);
-  --go-sel-word: rgba(245, 196, 165, 0.42);
-  --go-accent-bar: linear-gradient(180deg, #b46060, #d68a78);
+  --go-sel: rgba(139, 101, 181, 0.16);
+  --go-sel-strong: rgba(139, 101, 181, 0.30);
+  --go-sel-word: rgba(165, 48, 113, 0.30);
+  --go-accent-bar: linear-gradient(180deg, #5AA4DE, #8B65B5);
 
   /* Glassmorphism */
   --go-glass-bg: color-mix(in srgb, var(--go-surface) 58%, rgba(255, 255, 255, 0.32));
   --go-glass-bg-strong: color-mix(in srgb, var(--go-surface) 72%, rgba(255, 255, 255, 0.40));
   --go-glass-border: 1rpx solid rgba(255, 255, 255, 0.20);
-  --go-glass-shadow: 0 8rpx 28rpx rgba(80, 50, 30, 0.14), 0 2rpx 8rpx rgba(80, 50, 30, 0.10);
+  --go-glass-shadow: 0 8rpx 28rpx rgba(45, 42, 53, 0.10), 0 2rpx 8rpx rgba(45, 42, 53, 0.08);
   --go-glass-blur: 24rpx;
   --go-glass-radius: 20rpx;
-  --go-glass-glow: radial-gradient(120% 80% at 12% 0%, rgba(255, 255, 255, 0.28), rgba(255, 191, 155, 0.10) 42%, transparent 70%);
+  --go-glass-glow: radial-gradient(120% 80% at 12% 0%, rgba(255, 255, 255, 0.30), rgba(139, 101, 181, 0.10) 42%, transparent 70%);
   --go-glass-hover: 1.05;
 
   /* 阴影 */
-  --go-elev-1: 0 1rpx 2rpx rgba(60, 40, 24, 0.08), 0 2rpx 6rpx rgba(60, 40, 24, 0.10);
-  --go-shadow-1: 0 1rpx 2rpx rgba(60, 40, 24, 0.08), 0 2rpx 6rpx rgba(60, 40, 24, 0.10);
-  --go-shadow-2: 0 2rpx 6rpx rgba(60, 40, 24, 0.10), 0 8rpx 20rpx rgba(60, 40, 24, 0.12);
-  --go-shadow-3: 0 6rpx 16rpx rgba(60, 40, 24, 0.14), 0 16rpx 36rpx rgba(60, 40, 24, 0.16);
-  --go-nav-shadow: 0 -1rpx 0 rgba(60, 40, 24, 0.08), 0 1rpx 8rpx rgba(60, 40, 24, 0.08);
+  --go-elev-1: 0 1rpx 2rpx rgba(45, 42, 53, 0.06), 0 2rpx 6rpx rgba(45, 42, 53, 0.08);
+  --go-shadow-1: 0 1rpx 2rpx rgba(45, 42, 53, 0.06), 0 2rpx 6rpx rgba(45, 42, 53, 0.08);
+  --go-shadow-2: 0 2rpx 6rpx rgba(45, 42, 53, 0.08), 0 8rpx 20rpx rgba(45, 42, 53, 0.10);
+  --go-shadow-3: 0 6rpx 16rpx rgba(45, 42, 53, 0.10), 0 16rpx 36rpx rgba(45, 42, 53, 0.12);
+  --go-nav-shadow: 0 -1rpx 0 rgba(45, 42, 53, 0.06), 0 1rpx 8rpx rgba(45, 42, 53, 0.06);
 
   /* 遮罩 */
-  --go-scrim: rgba(60, 45, 30, 0.48);
-  --go-overlay: rgba(243, 235, 222, 0.78);
+  --go-scrim: rgba(30, 25, 45, 0.48);
+  --go-overlay: rgba(235, 232, 242, 0.82);
 }
 
 :root {
@@ -179,15 +174,14 @@ onHide(() => {})
 page,
 body {
   background: var(--go-bg);
-  /* 颗粒磨砂层(最底) + 暖色光晕,营造手作陶质感 */
+  /* 背景重新设计：淡薰衣草灰底 + 蓝紫光晕，干净、冷静、编辑感 */
   background-image:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E"),
     var(--go-bg-glow),
-    radial-gradient(60% 40% at 85% 8%, rgba(255, 191, 155, 0.22), transparent 60%),
-    radial-gradient(55% 38% at 10% 88%, rgba(180, 96, 96, 0.16), transparent 62%);
-  background-repeat: repeat, no-repeat, no-repeat, no-repeat;
-  background-size: 160rpx 160rpx, cover, cover, cover;
-  background-attachment: fixed, fixed, fixed, fixed;
+    radial-gradient(60% 40% at 85% 8%, rgba(90, 164, 222, 0.10), transparent 60%),
+    radial-gradient(55% 38% at 10% 88%, rgba(139, 101, 181, 0.10), transparent 62%);
+  background-repeat: no-repeat, no-repeat, no-repeat;
+  background-size: cover, cover, cover;
+  background-attachment: fixed, fixed, fixed;
   color: var(--go-on-surface);
   font-family: var(--go-font-sans);
   font-size: var(--go-fs-body-sm);
@@ -398,7 +392,7 @@ image {
 }
 .go-card:hover {
   transform: scale(var(--go-glass-hover));
-  box-shadow: 0 14rpx 40rpx rgba(80, 50, 30, 0.20), 0 4rpx 12rpx rgba(80, 50, 30, 0.14);
+  box-shadow: 0 14rpx 40rpx rgba(45, 42, 53, 0.16), 0 4rpx 12rpx rgba(45, 42, 53, 0.10);
   z-index: 5;
 }
 .go-card--flat {
@@ -886,7 +880,7 @@ image {
 }
 .go-glass:hover {
   transform: scale(var(--go-glass-hover));
-  box-shadow: 0 14rpx 40rpx rgba(80, 50, 30, 0.20), 0 4rpx 12rpx rgba(80, 50, 30, 0.14);
+  box-shadow: 0 14rpx 40rpx rgba(45, 42, 53, 0.16), 0 4rpx 12rpx rgba(45, 42, 53, 0.10);
   z-index: 5;
 }
 /* 卡片之间重叠 */
