@@ -93,16 +93,17 @@
       <text class="retry btn-text" @click="loadArticle">重试</text>
     </view>
 
-    <scroll-view v-else scroll-y class="reader" :style="readerStyle">
+    <scroll-view v-else scroll-y class="reader" :style="readerStyle" :scroll-into-view="scrollIntoId" scroll-with-animation>
       <!-- 原生渲染：混合块序列（段落逐词查词 + 图片）-->
       <template v-for="(b, bi) in tokenizedBlocks" :key="bi">
         <view
           v-if="b.type === 'p'"
+          :id="'para-' + bi"
           class="content article-p"
           @longpress="onParaLongPress(paraIndexMap[bi])"
-        ><template v-for="(tk, ti) in b.toks" :key="ti"><view
+        ><text class="tok tok--indent">{{ '\u2003\u2003' }}</text><template v-for="(tk, ti) in b.toks" :key="ti"><view
             v-if="tk.word"
-            :class="['tok tok--word', { 'tok--sel': isSel(paraIndexMap[bi], ti) }]"
+            :class="['tok tok--word', { 'tok--sel': isSel(paraIndexMap[bi], ti), 'tok--flash': flashActive(bi, ti) }]"
             @click="onNativeTok(tk, false, b.text, paraIndexMap[bi], ti)"
             @longpress="onNativeTok(tk, true, b.text, paraIndexMap[bi], ti)"
           ><text>{{ tk.text }}</text></view><text
@@ -152,11 +153,12 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { onLoad, onShow } from '@dcloudio/uni-app'
 import { db } from '@/utils/db.js'
 import { useAppStore } from '@/stores/app.js'
 import { normalizeQuery } from '@/utils/word.js'
+import { lemmaOf, saveOccurrence } from '@/utils/vocab.js'
 import WordCard from '@/components/WordCard.vue'
 import PolySpinner from '@/components/PolySpinner.vue'
 import GoIcon from '@/components/GoIcon.vue'
@@ -325,10 +327,17 @@ const selectionPreview = computed(() => {
   return t.length > 24 ? t.slice(0, 24) + '…' : t
 })
 
+const focusPara = ref(-1)
+const focusTok = ref(-1)
+const scrollIntoId = ref('')
+const flash = ref(null)
+
 onLoad((q) => {
   guid.value = decodeURIComponent((q && q.guid) || '')
   title.value = decodeURIComponent((q && q.title) || '')
   isQuiz.value = !!(q && q.quiz)
+  focusPara.value = parseInt((q && q.focusPara) || '-1', 10)
+  focusTok.value = parseInt((q && q.focusTok) || '-1', 10)
 })
 
 async function loadArticle() {
@@ -428,7 +437,11 @@ function onParaLongPress(pi) {
 // 点击正文图片：调用系统预览大图（长按可保存）
 function onImgTap(src) {
   if (!src) return
-  const urls = blocks.value.filter((b) => b.type === 'img' && b.src).map((b) => b.src)
+  // 预览大图只支持文件路径 / http(s) URL，base64 data: 无法预览，直接忽略
+  if (src.startsWith('data:')) return
+  const urls = blocks.value
+    .filter((b) => b.type === 'img' && b.src && !b.src.startsWith('data:'))
+    .map((b) => b.src)
   if (!urls.length) return
   try {
     uni.previewImage({ current: src, urls })
@@ -456,6 +469,9 @@ const tokenizedBlocks = computed(() => blocks.value.map((b) =>
 
 // 图片 URL：失败重试时追加缓存穿透参数，触发 <image> 重新加载
 function imgSrc(b) {
+  if (!b || !b.src) return ''
+  // data: base64 原样返回——追加 ?_cb= 会破坏 data URI 结构，导致永久加载失败
+  if (b.src.startsWith('data:')) return b.src
   if (!b._retry) return b.src
   const sep = b.src.includes('?') ? '&' : '?'
   return b.src + sep + '_cb=' + b._retry
@@ -542,7 +558,21 @@ function onNativeTok(tk, isLong, ctx, pi, ti) {
       return
     }
   }
-  openWord(tk.text, isLong ? (ctx || '') : '')
+  // 记录语境回溯锚点：单词点击且非做题模式时，把当前出处写入 vocab_occ
+  if (!isQuiz.value) {
+    const sentence = sentenceAround(ctx, ti)
+    saveOccurrence({
+      word: tk.text,
+      lemma: lemmaOf(tk.text),
+      articleGuid: guid.value,
+      articleTitle: title.value,
+      sourceLabel: cover.value.source,
+      sentence,
+      paraIndex: pi,
+      tokIndex: ti,
+    }).catch(() => {})
+  }
+  openWord(tk.text, '')
 }
 
 // 统一打开词卡：点击 / 选中 最终都走这里，避免中间态失败
@@ -659,8 +689,24 @@ onMounted(() => {
   store.initReader()
   initTtsConfig()
   syncTts()
-  loadArticle()
+  loadArticle().then(() => {
+    if (focusPara.value >= 0) nextTick(locateFocus)
+  })
 })
+
+// 从词汇中心回溯跳转：滚动到原句并闪烁高亮目标词
+function locateFocus() {
+  const bi = paraIndexMap.value.indexOf(focusPara.value)
+  if (bi < 0 || bi >= blocks.value.length) return // 文章结构变化则静默忽略
+  scrollIntoId.value = 'para-' + bi
+  if (focusTok.value >= 0) {
+    flash.value = { bi, ti: focusTok.value }
+    setTimeout(() => { flash.value = null }, 3000)
+  }
+}
+function flashActive(bi, ti) {
+  return !!(flash.value && flash.value.bi === bi && flash.value.ti === ti)
+}
 
 onUnmounted(() => {
   stopTts()
@@ -691,6 +737,9 @@ onUnmounted(() => {
 .reader-bar {
   background: color-mix(in srgb, var(--go-bg) 80%, transparent);
   display: flex; align-items: center; gap: var(--go-sp-3);
+  /* 顶部留白由系统真实 statusBarHeight（--go-safe-top，动态注入）驱动，
+     不再用固定 20rpx，自动适配各机型状态栏高度 */
+  padding-top: calc(var(--go-safe-top) + var(--go-sp-2));
 }
 .reader-bar__title {
   flex: 1; min-width: 0;
@@ -822,6 +871,8 @@ onUnmounted(() => {
 /* 段落间距：没有 margin 的话多个段落紧贴在一起，视觉上像没分段 */
 .article-p {
   margin-bottom: var(--go-sp-5);
+  word-break: normal;
+  overflow-wrap: break-word;
 }
 .tok { line-height: inherit; white-space: pre; }
 .tok--word {
@@ -837,6 +888,16 @@ onUnmounted(() => {
   box-shadow: inset 0 0 0 2rpx var(--go-primary);
   border-radius: 6rpx;
   font-weight: var(--go-fw-semibold);
+}
+.tok--flash {
+  background: var(--go-sel-word);
+  color: var(--go-primary);
+  border-radius: 6rpx;
+  animation: tok-flash 1s ease-in-out 0s 3;
+}
+@keyframes tok-flash {
+  0%, 100% { background: transparent; color: var(--go-on-surface); }
+  50% { background: var(--go-sel-word); color: var(--go-primary); }
 }
 
 /* 文章封面（ReadYou 风格：衬线大标题 + 来源 + 阅读时长） */

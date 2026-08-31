@@ -3,6 +3,17 @@
 import { Readability } from '@mozilla/readability'
 import { parseHTML } from 'linkedom'
 
+// 部分旧 webview（尤其 Android 低版本）缺少 Array.prototype.at，
+// 而 Readability / linkedom 内部会用到它，导致抓取时报 .at is not a function。
+if (!Array.prototype.at) {
+  Array.prototype.at = function (n) {
+    const len = this.length
+    let i = Number.isNaN(n) ? 0 : Math.trunc(n) || 0
+    if (i < 0) i += len
+    return i >= 0 && i < len ? this[i] : undefined
+  }
+}
+
 if (typeof DOMParser === 'undefined') {
   globalThis.DOMParser = class {
     parseFromString(html, _mime) {
@@ -68,8 +79,19 @@ function looksLikeFooterLine(line) {
 }
 
 export function extractArticle(html, baseUrl) {
-  const doc = parseDocument(String(html == null ? '' : html))
-  const parsed = new Readability(doc).parse()
+  const rawHtml = String(html == null ? '' : html)
+  const doc = parseDocument(rawHtml)
+
+  // Readability 在解析某些极简/异常 HTML（如 Hacker News）时会访问到 null 节点，
+  // 直接抛出 "Cannot read property 'tagName' of null"。外层捕获后降级为原始 HTML 抽取。
+  let parsed = null
+  try {
+    parsed = new Readability(doc).parse()
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.warn('[extractArticle] Readability failed:', e && e.message)
+  }
+
   let article
   if (parsed) {
     article = parsed
@@ -87,7 +109,7 @@ export function extractArticle(html, baseUrl) {
   } else {
     const root = doc.documentElement
     article = {
-      content: String(html == null ? '' : html),
+      content: rawHtml,
       documentElement: root,
       textContent: ((doc.body && doc.body.textContent) || (root && root.textContent) || '').trim(),
       title: doc.title || '',
@@ -100,8 +122,10 @@ export function extractArticle(html, baseUrl) {
   if (article.documentElement) {
     const nodes = article.documentElement.querySelectorAll('p, div, h1, h2, h3, h4, h5, h6, li, blockquote, picture, figure')
     nodes.forEach((el) => {
+      if (!el || !el.tagName) return
+
       const collectImg = (img) => {
-        if (!img || img.tagName !== 'IMG') return null
+        if (!img || !img.tagName || img.tagName !== 'IMG') return null
         const srcset = img.getAttribute('srcset') || img.getAttribute('data-srcset') || ''
         let best = ''
         if (srcset) {
@@ -112,7 +136,7 @@ export function extractArticle(html, baseUrl) {
         return { src: absUrl(raw, baseUrl), alt: img.getAttribute('alt') || '' }
       }
 
-      const childImgs = Array.from(el.children || []).filter((c) => c.tagName === 'IMG')
+      const childImgs = Array.from(el.children || []).filter((c) => c && c.tagName === 'IMG')
       const t = stripUiNoise((el.textContent || '').replace(/\s+/g, ' ').trim())
       if (t) {
         plainText += t + '\n\n'
@@ -129,6 +153,7 @@ export function extractArticle(html, baseUrl) {
       if (el.tagName === 'PICTURE') {
         const sources = Array.from(el.querySelectorAll('source[srcset]'))
         for (const s of sources) {
+          if (!s || !s.tagName || s.tagName !== 'SOURCE') continue
           const ss = s.getAttribute('srcset') || ''
           let best = ''
           if (ss) {

@@ -1,6 +1,10 @@
 {
   "pages": [
     {
+      "path": "pages/home/home",
+      "style": { "navigationStyle": "custom", "enablePullDownRefresh": true }
+    },
+    {
       "path": "pages/reading/reading",
       "style": { "navigationStyle": "custom" }
     },
@@ -13,7 +17,11 @@
       "style": { "navigationStyle": "custom" }
     },
     {
-      "path": "pages/words/words",
+      "path": "pages/vocab/vocab",
+      "style": { "navigationStyle": "custom" }
+    },
+    {
+      "path": "pages/review/review",
       "style": { "navigationStyle": "custom" }
     },
     {
@@ -45,7 +53,9 @@
       "style": { "navigationStyle": "custom" }
     }
   ],
+  "entryPagePath": "pages/home/home",
   "globalStyle": {
+    "navigationStyle": "custom",
     "navigationBarTextStyle": "black",
     "navigationBarTitleText": "GlobalOverview",
     "navigationBarBackgroundColor": "#F2F0F7",

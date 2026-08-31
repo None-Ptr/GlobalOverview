@@ -116,6 +116,7 @@ import { onLoad, onShow } from '@dcloudio/uni-app'
 import { db, sqlVal } from '@/utils/db.js'
 import { loadSet, loadQuestionsByIds, typeLabel } from '@/utils/quiz.js'
 import { gradeBatch } from '@/utils/grade.js'
+import { recordCompletion } from '@/utils/habit.js'
 import { useAppStore } from '@/stores/app.js'
 import { useTransition } from '@/composables/useTransition'
 
@@ -269,6 +270,20 @@ async function submit() {
     }
     await db.clearDrafts(questions.value.map((q) => q.id))
     result.value = true
+
+    // 记录学习打卡（本地计数器，与 db 解耦）；正确率只计已判分部分
+    try {
+      const done = res.results.filter((r) => r.status === 'graded').length
+      const ok = res.results.filter((r) => r.status === 'graded' && r.correct).length
+      const rec = recordCompletion(ok, done)
+      if (rec.newBadges && rec.newBadges.length) {
+        uni.showToast({
+          title: '成就解锁：' + rec.newBadges.map((b) => b.label).join('、'),
+          icon: 'none',
+          duration: 2200,
+        })
+      }
+    } catch (e) {}
 
     const correct = res.results.filter((r) => r.status === 'graded' && r.correct).length
     let content = `正确 ${correct} / ${res.results.length}`

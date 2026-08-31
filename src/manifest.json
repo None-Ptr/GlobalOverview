@@ -2,8 +2,8 @@
     "name" : "GlobalOverview",
     "appid" : "__UNI__A84FFD9",
     "description" : "",
-    "versionName" : "1.0.0",
-    "versionCode" : "100",
+    "versionName" : "2.1.0",
+    "versionCode" : "210",
     "transformPx" : false,
     "app-plus" : {
         "usingComponents" : true,

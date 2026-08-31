@@ -51,7 +51,7 @@
     </view>
     <scroll-view v-else scroll-y class="list">
       <view v-if="!articles.length" class="state">
-        <view class="state-ico"><GoIcon name="book" size="72rpx" /></view>
+        <view class="state-ico"><GoIcon name="book" :size="'72rpx'" /></view>
         <text class="state-msg">阅读页点「加入计划」可在此生成题目</text>
       </view>
       <view v-for="(a, idx) in articles" :key="a.id" class="card go-pressable go-enter" :style="{ '--i': idx }">
@@ -71,6 +71,7 @@
           <text v-else class="set-export" @click="exportSet(a)">导出</text>
         </view>
         <view class="card-ops">
+          <text class="op-view" @click="viewOriginal(a)">查看原文</text>
           <text class="op-remove" @click="removeFromPlan(a.id)">移出计划</text>
         </view>
       </view>
@@ -100,7 +101,10 @@
         <view class="preset-actions">
           <text v-if="activePreset" class="pc-del" @click="deletePreset">删除当前</text>
           <text class="pc-cancel" @click="showPreset = false">取消</text>
-          <text class="pc-ok" @click="savePreset">保存</text>
+          <view class="pc-ok go-btn" @click="savePreset">
+            <GoIcon name="check" :size="32" />
+            <text>保存</text>
+          </view>
         </view>
       </view>
     </view>
@@ -157,7 +161,7 @@ async function load() {
 
     const plan = await db.select('SELECT articleId FROM plan_items')
     const ids = plan.map((p) => String(p.articleId))
-    const all = await db.select('SELECT id, title, plainText, wordCount FROM articles')
+    const all = await db.select('SELECT id, guid, title, plainText, wordCount FROM articles')
     articles.value = all.filter((a) => ids.includes(String(a.id)))
     await loadSets()
   } catch (e) {
@@ -237,6 +241,10 @@ async function genSet(article) {
 
 function openSet(s) { uni.navigateTo({ url: `/pages/quiz/quiz?setId=${s.id}` }) }
 function exportSet(a) { uni.navigateTo({ url: `/pages/export/export?articleId=${a.id}` }) }
+function viewOriginal(a) {
+  if (!a.guid) { uni.showToast({ title: '缺少原文标识', icon: 'none' }); return }
+  uni.navigateTo({ url: '/pages/article/article?guid=' + encodeURIComponent(a.guid) })
+}
 
 function removeFromPlan(id) {
   uni.showModal({
@@ -366,7 +374,9 @@ onShow(load)
 .no-set { font-size: var(--go-fs-meta); color: var(--go-on-surface-3); }
 .set-export { font-size: var(--go-fs-meta); color: var(--go-primary); }
 .set-export:active { opacity: .5; }
-.card-ops { margin-top: var(--go-sp-4); padding-top: var(--go-sp-4); border-top: 1rpx solid var(--go-outline); }
+.card-ops { margin-top: var(--go-sp-4); padding-top: var(--go-sp-4); border-top: 1rpx solid var(--go-outline); display: flex; gap: var(--go-sp-6); }
+.op-view { font-size: var(--go-fs-meta); color: var(--go-primary); }
+.op-view:active { opacity: .5; }
 .op-remove { font-size: var(--go-fs-meta); color: var(--go-on-surface-3); }
 .op-remove:active { opacity: .5; }
 .loading-mask {
@@ -393,13 +403,21 @@ onShow(load)
 .preset-title { font-size: var(--go-fs-h1); font-weight: var(--go-fw-semibold); text-align: center; display: block; margin-bottom: var(--go-sp-6); color: var(--go-on-surface); }
 .lbl { font-size: var(--go-fs-meta); color: var(--go-on-surface-3); margin-top: var(--go-sp-3); display: block; }
 .go-field {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  min-height: 84rpx;
+  line-height: 1.4;
   font-size: var(--go-fs-body-sm);
   color: var(--go-on-surface);
-  padding: var(--go-sp-3);
+  padding: var(--go-sp-3) var(--go-sp-4);
   border: 1rpx solid var(--go-outline);
   border-radius: var(--go-r-md);
   background: var(--go-surface-2);
   margin-top: var(--go-sp-2);
+}
+input.go-field {
+  height: 84rpx;
 }
 .preset-actions {
   display: flex; justify-content: center; align-items: center; margin-top: var(--go-sp-6);
@@ -407,7 +425,13 @@ onShow(load)
 }
 .pc-del { color: var(--go-danger); font-size: var(--go-fs-body-sm); margin-right: auto; }
 .pc-cancel { color: var(--go-on-surface-3); margin-right: var(--go-sp-6); font-size: var(--go-fs-body); }
-.pc-ok { color: var(--go-primary); font-size: var(--go-fs-body); font-weight: var(--go-fw-semibold); }
+.pc-ok {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--go-sp-1);
+  height: 72rpx;
+  padding: 0 var(--go-sp-5);
+}
 
 @keyframes go-fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes go-sheet-up { from { transform: translateY(100%); } to { transform: translateY(0); } }

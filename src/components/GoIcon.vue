@@ -42,6 +42,11 @@ const map = {
   plan: 'calendar',
   words: 'list',
   mine: 'person',
+  home: 'home',              // 首页
+  trophy: 'medal',           // 成就徽章（uni-icons 无 trophy，用 medal）
+  flame: 'fire',             // 连续打卡火焰
+  lock: 'locked',            // 未解锁
+  check: 'checkmarkempty',   // 确认/保存
   'arrow-left': 'arrow-left',
   plus: 'plus',
   menu: 'bars',
@@ -55,6 +60,7 @@ const map = {
   broom: 'clear',
   alert: 'info',
   book: 'compose',
+  'book-open': 'compose', // 原文/笔记（uni-icons 无 book-open，用 compose）
   refresh: 'refresh',
   copy: 'paperclip',
   check: 'checkmarkempty',

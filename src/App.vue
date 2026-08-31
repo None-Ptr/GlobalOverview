@@ -166,8 +166,10 @@ onHide(() => {})
   --go-content-max: 760rpx;
   --go-appbar-h: 104rpx;
   --go-nav-h: 110rpx;
-  --go-safe-top: env(safe-area-inset-top, 0rpx);
-  --go-safe-bottom: env(safe-area-inset-bottom, 0rpx);
+  /* 状态栏/底部安全区：直接引用 uni-app 框架内置变量，由框架逐平台注入真实高度，
+     无需 JS。--status-bar-height 在 App 端即系统状态栏像素高，自定义导航下顶栏留白用它驱动。 */
+  --go-safe-top: var(--status-bar-height, 20px);
+  --go-safe-bottom: var(--safe-area-inset-bottom, 0px);
 }
 
 /* ============ 全局基础 ============ */

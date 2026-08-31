@@ -1,5 +1,6 @@
 import { db } from './db.js'
 import { getProfiles, chat } from './llm.js'
+import { lemmaOf } from './vocab.js'
 import { request } from './http.js'
 import { translate } from './translate.js'
 
@@ -30,11 +31,11 @@ async function cacheGet(key, mode) {
   try { return JSON.parse(rows[0].result) } catch (e) { return null }
 }
 
-async function cachePut(key, mode, result) {
+async function cachePut(key, mode, result, lemma) {
   await db.init()
   await db.execute(
-    'INSERT OR REPLACE INTO word_cache (word, mode, result, at) VALUES ('
-    + `${sqlVal(key)}, ${sqlVal(mode)}, ${sqlVal(JSON.stringify(result))}, ${sqlVal(Date.now())})`
+    'INSERT OR REPLACE INTO word_cache (word, mode, result, at, lemma) VALUES ('
+    + `${sqlVal(key)}, ${sqlVal(mode)}, ${sqlVal(JSON.stringify(result))}, ${sqlVal(Date.now())}, ${sqlVal(lemma || null)})`
   )
 }
 
@@ -135,17 +136,18 @@ export async function lookupWord(text, mode = 'en2zh', llmConfig = null, context
     result = await fetchEn2ZhByLLM(q, llmConfig)
   }
 
-  await cachePut(cacheKey, cacheMode, result).catch(() => {})
+  const lemma = kind === 'phrase' ? null : lemmaOf(q)
+  await cachePut(cacheKey, cacheMode, result, lemma).catch(() => {})
   return result
 }
 
 export async function loadWordCache(limit = 200) {
   await db.init()
-  const rows = await db.select(`SELECT word, mode, result, at FROM word_cache ORDER BY at DESC LIMIT ${Number(limit) || 200}`)
+  const rows = await db.select(`SELECT word, mode, result, at, lemma FROM word_cache ORDER BY at DESC LIMIT ${Number(limit) || 200}`)
   return (rows || []).map((r) => {
     let parsed = null
     try { parsed = JSON.parse(r.result) } catch (e) { parsed = null }
-    return { word: r.word, mode: r.mode, at: r.at, result: parsed }
+    return { word: r.word, mode: r.mode, at: r.at, lemma: r.lemma, result: parsed }
   })
 }
 

@@ -63,7 +63,7 @@ function request(options) {
 }
 
 // 从模型回复中提取 JSON：容忍 markdown 代码块与前后噪声文本
-function parseJsonLoose(content) {
+export function parseJsonLoose(content) {
   let s = String(content).trim()
   const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/i)
   if (fence) s = fence[1].trim()

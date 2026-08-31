@@ -25,9 +25,10 @@ import GoIcon from '@/components/GoIcon.vue'
 const store = useAppStore()
 
 const tabs = [
+  { key: 'home', text: '首页', page: '/pages/home/home' },
   { key: 'reading', text: '阅读', page: '/pages/reading/reading' },
   { key: 'plan', text: '计划', page: '/pages/plan/plan' },
-  { key: 'words', text: '生词', page: '/pages/words/words' },
+  { key: 'words', text: '词汇', page: '/pages/vocab/vocab' },
   { key: 'mine', text: '我的', page: '/pages/mine/mine' },
 ]
 

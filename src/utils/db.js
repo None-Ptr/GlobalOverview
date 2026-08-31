@@ -2,6 +2,8 @@
 // 非 5+App 环境（开发期 / 单元测试）走 localStorage 持久化的内存表引擎作为兼容后备，
 // 对上层暴露完全一致的 execute/select/insertReturnId 语义。
 
+import { clearHabit } from './habit.js'
+
 const DB_NAME = 'global_overview.db'
 const IS_APP = typeof plus !== 'undefined' && !!plus.sqlite
 const MEM_KEY = 'go_mem_db'
@@ -46,7 +48,33 @@ CREATE TABLE IF NOT EXISTS answers (
 );
 CREATE TABLE IF NOT EXISTS word_cache (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  word TEXT, mode TEXT, result TEXT, at INTEGER, UNIQUE(word, mode)
+  word TEXT, mode TEXT, result TEXT, at INTEGER, lemma TEXT,
+  UNIQUE(word, mode)
+);
+CREATE TABLE IF NOT EXISTS vocab_head (
+  head TEXT PRIMARY KEY,
+  kind TEXT DEFAULT 'word',
+  firstSeen INTEGER, lastSeen INTEGER,
+  occCount INTEGER DEFAULT 1,
+  family TEXT,
+  fsrs_state INTEGER DEFAULT 0,
+  fsrs_due INTEGER,
+  fsrs_s REAL DEFAULT 0,
+  fsrs_d REAL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS vocab_occ (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  word TEXT, lemma TEXT,
+  articleGuid TEXT, articleTitle TEXT, sourceLabel TEXT,
+  sentence TEXT, paraIndex INTEGER, tokIndex INTEGER, at INTEGER,
+  UNIQUE(word, articleGuid, paraIndex, tokIndex)
+);
+CREATE TABLE IF NOT EXISTS vocab_sentence (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  sentence TEXT UNIQUE,
+  articleGuid TEXT, articleTitle TEXT, sourceLabel TEXT,
+  paraIndex INTEGER, tokIndex INTEGER, at INTEGER,
+  analysis TEXT
 );
 CREATE TABLE IF NOT EXISTS presets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -65,16 +93,6 @@ CREATE TABLE IF NOT EXISTS templates (
   name TEXT UNIQUE, source TEXT
 );
 `
-
-// 旧库升级：answers 表结构对齐（补 draft / status / comment 列）
-const MIGRATIONS = [
-  'ALTER TABLE answers ADD COLUMN draft TEXT',
-  "ALTER TABLE answers ADD COLUMN status TEXT DEFAULT 'graded'",
-  'ALTER TABLE answers ADD COLUMN comment TEXT',
-  'ALTER TABLE answers ADD COLUMN correct INTEGER',
-  'ALTER TABLE answers ADD COLUMN wrong INTEGER DEFAULT 0',
-  'ALTER TABLE articles ADD COLUMN blocks TEXT',
-]
 
 // 显式检测列是否存在，不存在才 ALTER（避免靠 ALTER 抛错被吞的隐式逻辑）。
 // 真机 plus.sqlite 不可用时（非 App 环境）直接跳过，兼容内存引擎。
@@ -138,6 +156,9 @@ const MEM_UNIQUE = {
   plan_items: ['articleId'],
   templates: ['name'],
   kv: ['key'],
+  vocab_head: ['head'],
+  vocab_occ: ['word', 'articleGuid', 'paraIndex', 'tokIndex'],
+  vocab_sentence: ['sentence'],
 }
 
 // 需要为查询加速建立单列索引的列（JOIN / 点查高频列），配合 memSelect 的索引命中
@@ -145,6 +166,9 @@ const MEM_INDEX_COLS = {
   feed_items: ['guid', 'feedId'],
   articles: ['guid'],
   feeds: ['url'],
+  vocab_head: ['head'],
+  vocab_occ: ['word', 'lemma'],
+  vocab_sentence: ['sentence'],
 }
 
 function memLoad() {
@@ -202,11 +226,32 @@ function memIndexDelete(tableName, row) {
 }
 
 let flushTimer = null
+// 内存库上限：文章正文 / blocks / base64 图片体积大，长期无界增长会撑爆
+// localStorage 配额（超限后 setStorageSync 抛错被静默吞掉 → 数据神秘丢失）。
+// 写入前按 capturedAt 保留最新的 N 条，超出部分直接丢弃。
+const ARTICLE_CACHE_MAX = 200
+function trimArticleCache() {
+  const t = mem.tables && mem.tables.articles
+  if (!t || !t.rows || t.rows.length <= ARTICLE_CACHE_MAX) return
+  t.rows.sort((a, b) => (Number(b.capturedAt) || 0) - (Number(a.capturedAt) || 0))
+  t.rows.length = ARTICLE_CACHE_MAX
+  memRebuildIndex('articles')
+}
 function memFlush() {
   if (flushTimer) return
   flushTimer = setTimeout(() => {
     flushTimer = null
-    try { uni.setStorageSync(MEM_KEY, JSON.stringify(mem.tables)) } catch (e) {}
+    try {
+      trimArticleCache()
+      uni.setStorageSync(MEM_KEY, JSON.stringify(mem.tables))
+    } catch (e) {
+      // 配额超限：再激进裁剪一次并重试；其余错误在开发期可见，避免静默丢失
+      if (e && /quota/i.test(String(e.message || e))) {
+        try { trimArticleCache(); uni.setStorageSync(MEM_KEY, JSON.stringify(mem.tables)) } catch (e2) {}
+      }
+      const isProd = (typeof process !== 'undefined' && process.env && process.env.NODE_ENV === 'production')
+      if (!isProd && typeof console !== 'undefined') console.error('[db] memFlush failed', e)
+    }
   }, 60)
 }
 
@@ -692,6 +737,7 @@ async function init() {
       try { await ensureColumn('answers', 'correct', 'INTEGER') } catch (e) {}
       try { await ensureColumn('answers', 'wrong', 'INTEGER DEFAULT 0') } catch (e) {}
       try { await ensureColumn('feeds', 'failCount', 'INTEGER DEFAULT 0') } catch (e) {}
+      try { await ensureColumn('word_cache', 'lemma', 'TEXT') } catch (e) {}
       inited = true
     } catch (e) {
       initPromise = null
@@ -778,9 +824,11 @@ async function insertReturnId(sql) {
 // 清空全部业务数据（保留 LLM 配置与阅读偏好）
 async function clearAll() {
   const tables = ['feeds', 'feed_items', 'articles', 'question_sets', 'questions',
-    'answers', 'word_cache', 'presets', 'plan_items']
-  if (!IS_APP) { memClear(); return }
-  for (const t of tables) await execute(`DELETE FROM ${t}`)
+    'answers', 'word_cache', 'presets', 'plan_items', 'vocab_head', 'vocab_occ', 'vocab_sentence']
+  if (!IS_APP) { memClear() }
+  else for (const t of tables) await execute(`DELETE FROM ${t}`)
+  // 习惯打卡数据随业务数据一起清空（用户决策：全部清空）
+  try { clearHabit() } catch (e) {}
 }
 
 // 只清缓存（正文 / 词典 / 抓取列表），保留题目与错题
