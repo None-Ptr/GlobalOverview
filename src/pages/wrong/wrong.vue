@@ -96,7 +96,11 @@ async function load() {
     for (const q of questions) {
       const latest = latestByQ.get(q.id)
       if (!latest) continue
-      if (Number(latest.wrong) !== 1) continue
+      // 错题本口径：wrong=1（已判为错）**或** status='pending'（判分失败待重判）。
+      // 只按 wrong=1 筛选的话，grade.js 修正后 pending 行 wrong=0，
+      // pendingCount 恒为 0，「重判 N」入口永远不显示 → 用户无从重判。
+      const isPending = latest.status === 'pending'
+      if (Number(latest.wrong) !== 1 && !isPending) continue
       out.push({
         id: q.id,
         type: q.type,

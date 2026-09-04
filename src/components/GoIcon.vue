@@ -13,6 +13,7 @@
 // 统一图标组件（基于 uni-icons 图标库）：把项目内自有的 name 映射到 uni-icons 的 type。
 // 通过 size(color 默认为 currentColor，跟随父级 CSS color) 控制大小与上色，
 // 规避 webview 对自绘 SVG 的渲染问题。class 透传、:size、spin 行为保持一致。
+import { computed } from 'vue'
 import uniIcons from '@dcloudio/uni-ui/lib/uni-icons/uni-icons.vue'
 
 const props = defineProps({
@@ -25,12 +26,14 @@ const props = defineProps({
 
 // size 接收 string(如 '56rpx'/'40px') 或 number(默认按 px)
 // uni-icons 的 size 为数字(单位 px)，此处把 rpx/px 统一换算为 px 数字
-const iconSize = (() => {
+// 必须是 computed：此前写成 setup 期一次性 const，导致动态切换
+// :name / :size 后图标不刷新（播放/停止、已解锁/未解锁、已加入/加入 等均受影响）。
+const iconSize = computed(() => {
   const s = String(props.size)
   if (s.endsWith('rpx')) return Math.round(parseFloat(s) / 2) // rpx → px (750 设计宽)
   if (s.endsWith('px')) return parseFloat(s)
   return parseFloat(s) || 24
-})()
+})
 
 // name → uni-icons type 映射（已与 uniicons_file.ts 的 fontData 逐项校验）
 // 字体内不存在 → 替换为已存在的（否则渲染为空白方块）：
@@ -57,13 +60,13 @@ const map = {
   target: 'location',
   search: 'search',
   'book-check': 'checkbox-filled',
-  broom: 'clear',
+  // 注意：uni-icons 没有扫帚/刷子/魔法棒图标，'clear' 实际渲染为叉号(关闭)，
+  // 曾误用作「清理噪声」导致图标语义错误。需要「去除」语义请用 trash。
   alert: 'info',
   book: 'compose',
   'book-open': 'compose', // 原文/笔记（uni-icons 无 book-open，用 compose）
   refresh: 'refresh',
   copy: 'paperclip',
-  check: 'checkmarkempty',
   export: 'upload',
   star: 'star',
   brain: 'color',
@@ -72,7 +75,8 @@ const map = {
   stop: 'closeempty',    // 停止
 }
 
-const type = map[props.name] || 'help'
+// 必须是 computed：动态 :name 切换时（如播放/停止）才能重新求值并更新图标
+const type = computed(() => map[props.name] || 'help')
 </script>
 
 <style scoped lang="scss">

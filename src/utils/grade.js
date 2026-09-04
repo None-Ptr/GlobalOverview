@@ -79,10 +79,15 @@ async function writeResult(questionId, final, result) {
   )
   const maxG = existing && existing.length ? Number(existing[0].gradedAt) || 0 : 0
   const now = Math.max(Date.now(), maxG + 1)
+  // wrong 只在「已判分且判为错」时记 1。此前写作 correct===1?0:1，
+  // 会把 AI 判分失败(status='pending', correct=0)的行也记成 wrong=1，
+  // 导致未判分的题被 export.js(WHERE a.wrong=1) 塞进错题本。
+  const status = result.status || 'graded'
+  const wrong = status === 'graded' && result.correct === 1 ? 0 : (status === 'graded' ? 1 : 0)
   await db.execute(
     `INSERT INTO answers (questionId, final, correct, wrong, status, comment, gradedAt) VALUES (`
-    + `${sqlVal(questionId)}, ${sqlVal(final)}, ${sqlVal(result.correct)}, ${sqlVal(result.correct === 1 ? 0 : 1)}, `
-    + `${sqlVal(result.status || 'graded')}, ${sqlVal(result.comment || '')}, ${sqlVal(now)})`
+    + `${sqlVal(questionId)}, ${sqlVal(final)}, ${sqlVal(result.correct)}, ${sqlVal(wrong)}, `
+    + `${sqlVal(status)}, ${sqlVal(result.comment || '')}, ${sqlVal(now)})`
   )
 }
 

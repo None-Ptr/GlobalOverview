@@ -74,7 +74,12 @@ function looksLikeFooterLine(line) {
   // 误当页脚整段删除，导致"篇幅太短"。长行一律视为正文，不做页脚过滤。
   if (t.length > 120) return false
   if (/\b(copyright|©|all rights reserved|privacy policy|terms of service|cookie|sitemap|newsletter|advertise|subscriptions?)\b/i.test(t)) return true
-  if (/^(all rights|your privacy|data is|market data|terms of|about|contact|careers|help|advertise with)/i.test(t)) return true
+  // 行首词须是"像导航/页脚"的短语：此前 ^(about|help|contact|careers) 无约束，
+  // 会把以 "About 30% of…"、"Help me…" 开头的**正文段落**误删，造成篇幅缺失。
+  // 加上跟随词边界（后面接 us/our/the/this 或标点/行尾），只命中导航性短语。
+  if (/^(?:all rights|your privacy|data is|market data|terms of|advertise with)\b/i.test(t)) return true
+  if (/^(?:about|contact|careers|help)\b\s*(?:us|our|me|the|this)?\s*[.:!?]?$/i.test(t)) return true
+  if (/^(?:about|contact|careers|help)\s+(?:us|our)\b/i.test(t)) return true
   return false
 }
 
@@ -120,7 +125,22 @@ export function extractArticle(html, baseUrl) {
   let plainText = ''
   const blocks = []
   if (article.documentElement) {
-    const nodes = article.documentElement.querySelectorAll('p, div, h1, h2, h3, h4, h5, h6, li, blockquote, picture, figure')
+    // 候选**不含裸 div**：Readability 恒用一个 <div id="readability-page-1"> 包裹
+    // 全文，若把 div 列为内容候选，它自身就是最外层节点，其所有 <p> 都会因
+    // "祖先也是候选" 被跳过 → N 段正文被并成 1 个 block，段落结构全丢
+    // （逐段 TTS、段落翻译、vocab_occ.paraIndex 全部退化）。
+    // 去重改为「div 仅在没有任何候选后代时才作为内容」，既避免 div+p 重复，
+    // 又保留无标签包裹的裸文本段。
+    const TEXT_SEL = 'p, h1, h2, h3, h4, h5, h6, li, blockquote, picture, figure'
+    const all = Array.from(article.documentElement.querySelectorAll(
+      `${TEXT_SEL}, div`
+    ))
+    const nodes = all.filter((el) => {
+      if (!el || !el.tagName) return false
+      if (String(el.tagName).toLowerCase() !== 'div') return true
+      // div 仅作为裸文本的兜底容器：内部没有任何真候选时才计入
+      return !el.querySelector(TEXT_SEL)
+    })
     nodes.forEach((el) => {
       if (!el || !el.tagName) return
 
@@ -136,7 +156,12 @@ export function extractArticle(html, baseUrl) {
         return { src: absUrl(raw, baseUrl), alt: img.getAttribute('alt') || '' }
       }
 
-      const childImgs = Array.from(el.children || []).filter((c) => c && c.tagName === 'IMG')
+      // 用 querySelectorAll('img') 取**后代**而非直系子：
+      // <figure><div><img></div></figure> 这类结构里 img 不是直系子，
+      // 此前会被整体漏掉；而 199 行的正则兜底仅在"一张图都没抓到"时才跑，
+      // 所以只要文章里另有别的图命中，这批图就永久丢失。
+      const childImgs = Array.from(el.querySelectorAll('img') || [])
+        .filter((c) => c && c.tagName && String(c.tagName).toLowerCase() === 'img')
       const t = stripUiNoise((el.textContent || '').replace(/\s+/g, ' ').trim())
       if (t) {
         plainText += t + '\n\n'

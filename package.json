@@ -6,7 +6,7 @@
   "scripts": {
     "dev:app": "uni -p app",
     "build:app": "uni build -p app",
-    "test": "node scripts/test-db.mjs && node scripts/test-render.mjs && node scripts/test-export.mjs && node scripts/test-grade.mjs && node scripts/test-word.mjs && node scripts/test-quiz.mjs && node scripts/test-article.mjs"
+    "test": "echo 本工程仅发布 App 端（5+App），原 Node 单元测试依赖已移除的内存引擎（H5 兼容层），不再适用；App 端逻辑请在 HBuilder 真机/自定义基座中验证。"
   },
   "dependencies": {
     "@dcloudio/uni-app": "3.0.0-alpha-5020320260803001",

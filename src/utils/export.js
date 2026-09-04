@@ -7,8 +7,7 @@ let _shareReadyCache = null
 export function _checkShareReady () {
   if (_shareReadyCache !== null) return _shareReadyCache
   try {
-    var ok = (typeof plus !== 'undefined')
-      && plus != null
+    var ok = plus != null
       && plus.share != null
       && typeof plus.share.sendWithSystem === 'function'
     _shareReadyCache = !!ok
@@ -20,7 +19,7 @@ export function _checkShareReady () {
 // 主动探测一次（在用户进入导出页前），把原生模块警告提前消费掉
 // 任何后续调用都直接读缓存，永不再触发 native 警告
 try {
-  if (typeof plus !== 'undefined' && plus && plus.share) {
+  if (plus && plus.share) {
     try { typeof plus.share.sendWithSystem } catch (_) {}
   }
 } catch (_) {}
@@ -390,7 +389,7 @@ export async function buildHtml({ title, subtitle = '', questions, options = {},
 //   2) 在 iOS 上：保留原 plus.webview.create + evalJS print。
 //   3) 兜底：若以上都不通，永远 resolve 一个 { mode: 'preview', file: url } 而不再 reject。
 export function exportPdf(html, filename = 'export') {
-  if (typeof plus === 'undefined' || !plus.io) {
+  if (!plus.io) {
     return Promise.reject(new Error('当前环境不支持导出 PDF（仅 APP 端可用）'))
   }
   const platform = (typeof uni !== 'undefined' && uni.getSystemInfoSync)
@@ -548,7 +547,7 @@ function shareFileUrl(fileEntry) {
 // 注意：plus.webview 打开的是独立全屏窗口，默认无任何导航栏/返回按钮，
 // 必须在 HTML 内注入一个返回浮层，否则用户无法退出预览（只能杀进程）。
 export function previewHtmlApp(html, filename = 'preview') {
-  if (typeof plus === 'undefined' || !plus.io) return false
+  if (!plus.io) return false
   const path = `_doc/${filename}_${Date.now()}.html`
   // 直接在写入文件前完成 wrap（不需要 url 占位）
   const wrapped = injectPreviewChrome(html)
@@ -626,7 +625,7 @@ export function injectPreviewChrome(html) {
     toast._t = setTimeout(function(){ t.classList.remove('go-prev-toast--on'); }, 1500);
   }
   function closePrev(){
-    if (typeof plus !== 'undefined' && plus.webview) {
+    if (plus.webview) {
       var wv = plus.webview.currentWebview();
       if (wv) { wv.close('slide-out-right'); return; }
     }
@@ -638,7 +637,15 @@ export function injectPreviewChrome(html) {
     // 先检测 plus.share 模块是否真的可用（manifest 里可能没声明 Share 模块），
     // 若不可用，直接走「复制 URL」兜底，避免触发 HTML5+ Runtime 的「打包时未添加 share 模块」警告弹窗。
     // 使用模块顶部一次性缓存的探测结果，避免每次点击都重新查属性触发 native 弹窗
-    var shareReady = _checkShareReady();
+    // 注意：这里**不能**调用 _checkShareReady()——它是 export.js 的模块作用域函数，
+    // 在这段注入到独立导出 HTML 的脚本里根本不存在，点击会抛 ReferenceError，
+    // 且该调用位于 try 之外，连兜底 toast 都执行不到（分享按钮完全失效）。
+    // 改为就地内联探测同样的条件。
+    var shareReady = false;
+    try {
+      shareReady = plus != null
+        && plus.share && (typeof plus.share.sendWithSystem === 'function');
+    } catch (e) { shareReady = false; }
     if (shareReady && url) {
       try {
         plus.share.sendWithSystem({ type:'file', files:[url], title:'练习卷导出' }, function(){ toast('已调起系统分享'); }, function(){ toast('未找到可用的分享应用'); });

@@ -8,7 +8,6 @@
 //
 // 缓存策略：合成后的 mp3 按 (cacheKey || 文本) + 音色 的哈希存到本地文件
 //   - App 端：plus.io PRIVATE_DOC/tts_cache/<hash>.mp3（重启仍在）
-//   - H5 端：内存 Map（页面生命周期内有效）
 
 const CFG_KEY = 'go_tts_cfg'
 
@@ -42,9 +41,6 @@ let player = null
 let playing = false
 let currentId = 0 // 用于让过期回调失效（stop 后旧请求不应再播放）
 
-// H5 内存缓存：key -> base64
-const _memCache = new Map()
-
 export function loadTtsConfig() {
   let cfg = null
   try {
@@ -53,7 +49,7 @@ export function loadTtsConfig() {
     cfg = null
   }
   // 旧配置（不含 apiUrl，即已废弃的 ttsapi）自动重置为 unifiedtts 默认配置
-  if (!cfg || typeof cfg !== 'object' || !cfg.apiUrl || !cfg.apiKey) {
+  if (!cfg || typeof cfg !== 'object' || !cfg.apiKey || !cfg.apiUrl) {
     cfg = { ...DEFAULT_CFG }
     try {
       uni.setStorageSync(CFG_KEY, cfg)
@@ -91,7 +87,7 @@ function _teardownPlayer() {
   playing = false
 }
 
-/* ---------------- 缓存（本地文件 / 内存） ---------------- */
+/* ---------------- 缓存（本地文件） ---------------- */
 function _hashKey(raw, voice) {
   let h = 2166136261 >>> 0
   const s = (voice || '') + '::' + raw
@@ -102,13 +98,8 @@ function _hashKey(raw, voice) {
   return 'tts_' + h.toString(36)
 }
 
-function _isApp() {
-  return typeof plus !== 'undefined' && plus.io
-}
-
 function _ensureTtsDir() {
   return new Promise((resolve, reject) => {
-    if (!_isApp()) return reject(new Error('no plus'))
     plus.io.requestFileSystem(plus.io.PRIVATE_DOC, (fs) => {
       fs.root.getDirectory('tts_cache', { create: true, exclusive: false }, (d) => resolve(d), (e) => reject(e))
     }, (e) => reject(e))
@@ -121,10 +112,6 @@ function _ensureTtsDir() {
 // 官方 5+ 文档示例即用相对路径：plus.audio.createPlayer("_Doc/Audio/test.mp3")。
 function _cacheURL(key) {
   return new Promise((resolve) => {
-    if (!_isApp()) {
-      const hit = _memCache.get(key)
-      return resolve(hit || null)
-    }
     _ensureTtsDir()
       .then((dir) => {
         dir.getFile(
@@ -141,7 +128,6 @@ function _cacheURL(key) {
 // 判断 _doc/tts_cache/xxx.mp3 缓存文件是否真实存在且非空；不存在返回 null
 function _cacheURLSafe(key, ab) {
   return new Promise((resolve) => {
-    if (!_isApp()) return resolve(_memCache.get(key) || null)
     _ensureTtsDir()
       .then((dir) => {
         dir.getFile(
@@ -198,7 +184,7 @@ function _writeLog(...parts) {
   //             }
   //           }, () => {})
   //         }, () => {})
-  //       }, () => {})
+  //       })
   //     }
   //   } catch (_) {}
   //   try { console.log(...parts) } catch (_) {}
@@ -213,12 +199,8 @@ function _delay(ms) {
   })
 }
 
-// 把音频写入缓存（App 写文件 / H5 写内存），非阻塞
+// 把音频写入缓存（App 写文件），非阻塞
 function _writeCache(key, ab, b64) {
-  if (!_isApp()) {
-    if (b64) _memCache.set(key, b64)
-    return
-  }
   // App 端：直接在 tts_cache 目录下创建/覆盖文件，一次性 write(ArrayBuffer) 后再 truncate，
   // 防止旧文件尺寸大于新内容导致尾部残留垃圾数据，进而播放报 MediaError。
   _ensureTtsDir()
@@ -295,38 +277,23 @@ async function speakEdge(cfg, text, callbacks) {
   const myId = ++currentId
   const voice = cfg.presetVoice || DEFAULT_CFG.presetVoice
   const key = _hashKey(callbacks.cacheKey != null ? String(callbacks.cacheKey) : input, voice)
-  _writeLog('[speakEdge] start', 'isApp', _isApp(), 'voice', voice, 'textLen', input.length)
+  _writeLog('[speakEdge] start', 'voice', voice, 'textLen', input.length)
   try {
     // 先尝试本地缓存
     const url = await _tryCache(key, myId, callbacks)
     if (url) return
-    // App 端：FileWriter 在本基座损坏，写文件必失败 → 直接拿网络直链交给原生播放器，
-    // 不再下载整段音频到内存（urlOnly）。H5 端仍需整段音频做 Blob/内存缓存。
-    const urlOnly = _isApp()
+    // App 端：FileWriter 在本基座损坏，写文件必失败 → 直接拿网络直链交给原生播放器，不下载整段音频到内存。
+    const urlOnly = true
     const { ab, b64, audioUrl } = await fetchUnifiedTts(cfg, input, myId, voice, { urlOnly })
     if (myId !== currentId) return
-    if (_isApp()) {
-      // App：用 unifiedtts 返回的网络直链直接播放（5+ 原生播放器原生支持 http/https）
-      if (!audioUrl) throw new Error('TTS 未返回音频直链')
-      _writeLog('[speakEdge] got audio url (stream, no file write):', audioUrl)
-      if (typeof callbacks.onReady === 'function') {
-        try { callbacks.onReady() } catch (e) {}
-      }
-      // App 端不写文件、不下整段音频，b64 为 null，不触发 onAudio（调用方无法用 null 持久化）
-      await _play(audioUrl, myId, 'mp3', callbacks)
-      return
-    }
-    // H5：整段音频已在内存，写 Blob/内存缓存后播放
-    _writeLog('[speakEdge] got audio', 'bytes', ab && ab.byteLength)
-    if (!ab || (ab.byteLength !== undefined && ab.byteLength === 0)) throw new Error('TTS 返回空音频')
+    // App：用 unifiedtts 返回的网络直链直接播放（5+ 原生播放器原生支持 http/https）
+    if (!audioUrl) throw new Error('TTS 未返回音频直链')
+    _writeLog('[speakEdge] got audio url (stream, no file write):', audioUrl)
     if (typeof callbacks.onReady === 'function') {
       try { callbacks.onReady() } catch (e) {}
     }
-    _writeCache(key, ab, b64)
-    if (typeof callbacks.onAudio === 'function') {
-      try { callbacks.onAudio(b64) } catch (e) {}
-    }
-    await _play(ab, myId, 'mp3', callbacks)
+    // App 端不写文件、不下整段音频，b64 为 null，不触发 onAudio（调用方无法用 null 持久化）
+    await _play(audioUrl, myId, 'mp3', callbacks)
   } catch (e) {
     if (myId === currentId) playing = false
     throw e
@@ -340,11 +307,7 @@ async function _tryCache(key, myId, callbacks, ab = null) {
   if (typeof callbacks.onReady === 'function') {
     try { callbacks.onReady() } catch (e) {}
   }
-  if (_isApp()) {
-    await _play(cached, myId, 'mp3', callbacks) // cached 为文件路径 URL
-  } else {
-    await _play(_b64ToArrayBuffer(cached), myId, 'mp3', callbacks) // cached 为 base64
-  }
+  await _play(cached, myId, 'mp3', callbacks) // cached 为文件路径 URL
   return true
 }
 
@@ -439,9 +402,9 @@ function fetchUnifiedTts(cfg, input, myId, voice, opts = {}) {
   })
 }
 
-/* ---------------- 播放（App 写文件 / H5 用 Blob） ---------------- */
+/* ---------------- 播放（App 用 plus.audio.createPlayer） ---------------- */
 function _play(abOrUrl, myId, ext = 'mp3', callbacks = {}) {
-  _writeLog('[_play] enter', 'isApp', _isApp(), 'argType', typeof abOrUrl, 'isString', typeof abOrUrl === 'string', 'len', abOrUrl && abOrUrl.byteLength != null ? abOrUrl.byteLength : (abOrUrl && abOrUrl.length))
+  _writeLog('[_play] enter', 'argType', typeof abOrUrl, 'isString', typeof abOrUrl === 'string', 'len', abOrUrl && abOrUrl.byteLength != null ? abOrUrl.byteLength : (abOrUrl && abOrUrl.length))
   return new Promise((resolve, reject) => {
     let started = false
     const markStart = () => {
@@ -469,98 +432,78 @@ function _play(abOrUrl, myId, ext = 'mp3', callbacks = {}) {
       reject(err)
     }
 
-    if (_isApp()) {
-      // 注意：此基座下 uni.createInnerAudioContext 内部依赖 setTimeout，而其运行上下文的 setTimeout 缺失，
-      // 调用即抛 "setTimeout is not a function"。故 App 端一律只用原生 plus.audio.createPlayer，绝不用 innerAudioContext。
-      const begin = (url, retryFile = true) => {
-        if (myId !== currentId) return resolve()
-        const useNative = !!(typeof plus !== 'undefined' && plus.audio && plus.audio.createPlayer)
-        if (!useNative) {
-          return onErr(new Error('原生音频播放器不可用'))
-        }
-        _writeLog('[tts] plus.audio src:', url, 'retryFile:', retryFile)
-        try {
-          const ap = plus.audio.createPlayer(url)
-          if (!ap) throw new Error('createPlayer 返回 null')
-          playing = true
-          player = { stop: () => { try { ap.stop() } catch (e) {} ap.close && ap.close() }, _native: ap }
-          ap.play(
-            () => { if (myId === currentId) playing = false; onEnd() },
-            (e) => {
-              // 原生播放失败（常因设备/路径差异）：先停掉原生播放器
-              try { ap.stop() } catch (_) {}
-              try { ap.close && ap.close() } catch (_) {}
-              const ec = (e && e.code != null) ? e.code : '?'
-              const em = (e && (e.errMsg || e.message)) || 'MediaError'
-              _writeLog('[tts] plus.audio play failed:', url, 'code', ec, em)
-              // _doc/ 相对路径失败时，再试一次 file:// 绝对路径（部分设备可能相反）
-              if (retryFile && typeof url === 'string' && url.startsWith('_doc/')) {
-                try {
-                  const fileUrl = plus.io.convertLocalFileSystemURL(url)
-                  if (fileUrl && fileUrl !== url) {
-                    _writeLog('[tts] retry plus.audio with file://')
-                    return begin(fileUrl, false)
-                  }
-                } catch (_) {}
-              }
-              // 直接上报原生错误（不再退化 innerAudioContext，避免 setTimeout 崩溃）
-              onErr(new Error('原生播放失败[' + ec + ']：' + em))
-            }
-          )
-          // 立即认为已开始（兼容性：避免 markStart 依赖 onPlay 触发）
-          markStart()
-          return
-        } catch (e) {
-          _writeLog('[tts] plus.audio createPlayer failed:', url, e && e.message)
-          // _doc/ 路径失败时，再试一次 file:// 绝对路径
-          if (retryFile && typeof url === 'string' && url.startsWith('_doc/')) {
-            try {
-              const fileUrl = plus.io.convertLocalFileSystemURL(url)
-              if (fileUrl && fileUrl !== url) {
-                _writeLog('[tts] retry plus.audio with file://')
-                return begin(fileUrl, false)
-              }
-            } catch (_) {}
-          }
-          onErr(new Error('原生播放器异常：' + (e && e.message ? e.message : 'createPlayer 失败')))
-        }
+    // App 端一律只用原生 plus.audio.createPlayer（此基座 uni.createInnerAudioContext 因 setTimeout 缺失会崩），绝不用 innerAudioContext。
+    const begin = (url, retryFile = true) => {
+      if (myId !== currentId) return resolve()
+      const useNative = !!(plus.audio && plus.audio.createPlayer)
+      if (!useNative) {
+        return onErr(new Error('原生音频播放器不可用'))
       }
-      if (typeof abOrUrl === 'string') {
-        begin(abOrUrl)
-      } else {
-        _writeTemp(abOrUrl, ext, myId)
-          .then((url) => { _writeLog('[tts] temp url', url); begin(url) })
-          .catch((e) => { _writeLog('[tts] writeTemp err', e); onErr(e) })
-      }
-    } else {
+      _writeLog('[tts] plus.audio src:', url, 'retryFile:', retryFile)
       try {
-        const url =
-          typeof abOrUrl === 'string'
-            ? abOrUrl
-            : URL.createObjectURL(new Blob([abOrUrl], { type: 'audio/mpeg' }))
-        const audio = new Audio(url)
-        audio.onplay = markStart
-        audio.onended = onEnd
-        audio.onerror = onErr
-        player = audio
-        audio.play().catch(onErr)
+        const ap = plus.audio.createPlayer(url)
+        if (!ap) throw new Error('createPlayer 返回 null')
+        playing = true
+        player = { stop: () => { try { ap.stop() } catch (e) {} ap.close && ap.close() }, _native: ap }
+        ap.play(
+          () => { if (myId === currentId) playing = false; onEnd() },
+          (e) => {
+            // 原生播放失败（常因设备/路径差异）：先停掉原生播放器
+            try { ap.stop() } catch (_) {}
+            try { ap.close && ap.close() } catch (_) {}
+            const ec = (e && e.code != null) ? e.code : '?'
+            const em = (e && (e.errMsg || e.message)) || 'MediaError'
+            _writeLog('[tts] plus.audio play failed:', url, 'code', ec, em)
+            // _doc/ 相对路径失败时，再试一次 file:// 绝对路径（部分设备可能相反）
+            if (retryFile && typeof url === 'string' && url.startsWith('_doc/')) {
+              try {
+                const fileUrl = plus.io.convertLocalFileSystemURL(url)
+                if (fileUrl && fileUrl !== url) {
+                  _writeLog('[tts] retry plus.audio with file://')
+                  return begin(fileUrl, false)
+                }
+              } catch (_) {}
+            }
+            // 直接上报原生错误（不再退化 innerAudioContext，避免 setTimeout 崩溃）
+            onErr(new Error('原生播放失败[' + ec + ']：' + em))
+          }
+        )
+        // 立即认为已开始（兼容性：避免 markStart 依赖 onPlay 触发）
         markStart()
+        return
       } catch (e) {
-        onErr(e)
+        _writeLog('[tts] plus.audio createPlayer failed:', url, e && e.message)
+        // _doc/ 路径失败时，再试一次 file:// 绝对路径
+        if (retryFile && typeof url === 'string' && url.startsWith('_doc/')) {
+          try {
+            const fileUrl = plus.io.convertLocalFileSystemURL(url)
+            if (fileUrl && fileUrl !== url) {
+              _writeLog('[tts] retry plus.audio with file://')
+              return begin(fileUrl, false)
+            }
+          } catch (_) {}
+        }
+        onErr(new Error('原生播放器异常：' + (e && e.message ? e.message : 'createPlayer 失败')))
       }
+    }
+    if (typeof abOrUrl === 'string') {
+      begin(abOrUrl)
+    } else {
+      _writeTemp(abOrUrl, ext, myId)
+        .then((url) => { _writeLog('[tts] temp url', url); begin(url) })
+        .catch((e) => { _writeLog('[tts] writeTemp err', e); onErr(e) })
     }
   })
 }
 
 // 写入 App 本地存储为临时音频文件（文件名带 myId，避免复用同一文件被旧播放器锁住）
-// 注：uni.getFileSystemManager 仅小程序/H5 可用，App 端必须用 plus.io。
+// App 端用 plus.io 写临时音频文件。
 // write 完成后再 truncate 到实际长度，避免旧文件尾部残留导致播放 MediaError。
 // 关键：plus.audio.createPlayer 必须接收 entry.toURL() 返回的 _doc/ 相对路径（如 _doc/go_tts_1.mp3），
 // 不能用 file:// 绝对路径（toLocalURL()）—— file:// 会让 Android MediaPlayer 报 -5；
 // 也不能用 plus.io.PRIVATE_DOC 字符串拼接（Android 上 PRIVATE_DOC 是 "_documents"，AudioPlayer 不识别）。
 function _writeTemp(arrayBuffer, ext, myId) {
   return new Promise((resolve, reject) => {
-    if (!_isApp()) return reject(new Error('no plus'))
     const writeOnce = (retryId) => {
       plus.io.resolveLocalFileSystemURL(
         plus.io.PRIVATE_DOC,
@@ -668,10 +611,6 @@ export function initTtsConfig() {
 
 // 清理：删除某篇文章的本地 TTS 缓存文件（按文章 id 推算的 key 可能不唯一，这里仅清目录）
 export function clearTtsCache() {
-  if (!_isApp()) {
-    _memCache.clear()
-    return
-  }
   _ensureTtsDir()
     .then((dir) => {
       dir.removeRecursively(() => {}, () => {})

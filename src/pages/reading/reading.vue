@@ -257,8 +257,9 @@ function dedupe(list) {
 
 // 抓取并入库文章正文，返回 article id（已存在则直接返回）
 async function captureArticle(it) {
-  const exists = await db.select(`SELECT id FROM articles WHERE guid = ${safeGuid(it.guid)} LIMIT 1`)
-  if (exists.length) return exists[0].id
+  // select 在异常路径下可能返回 undefined，直接取 .length 会 TypeError
+  const exists = (await db.select(`SELECT id FROM articles WHERE guid = ${safeGuid(it.guid)} LIMIT 1`)) || []
+  if (exists.length && exists[0]) return exists[0].id
   const html = await fetchText(it.link, { timeout: 20000 })
   const { html: bodyHtml, plainText, wordCount, blocks } = extractArticle(html, it.link)
   if (!plainText || plainText.length < DB_CONFIG.ARTICLE_MIN_CHARS) {
@@ -568,7 +569,7 @@ async function openItem(it) {
         cancelText: '重试',
         success: (r) => {
           if (r.confirm) {
-            if (typeof plus !== 'undefined' && plus.runtime) plus.runtime.openURL(it.link)
+            if (plus.runtime) plus.runtime.openURL(it.link)
           } else {
             openItem(it)
           }
@@ -585,18 +586,27 @@ async function openItem(it) {
 }
 
 onMounted(async () => {
-  await db.init()
-  await ensureFeeds()
-  const cached = await db.select(
-    "SELECT COUNT(*) AS c FROM feed_items WHERE title IS NOT NULL AND title <> ''"
-  )
-  const hasCache = cached.length && cached[0].c > 0
-  if (!hasCache) {
-    await refreshAll(true)
-  } else {
-    await loadAll(true)
+  // 必须兜底：db.init() 可能抛「数据库打开超时」。此前无 try/catch，
+  // 抛错后 loading 永远不落、页面永久空白，而阅读页还是首屏页 → 整个 App 不可用。
+  try {
+    await db.init()
+    await ensureFeeds()
+    const cached = (await db.select(
+      "SELECT COUNT(*) AS c FROM feed_items WHERE title IS NOT NULL AND title <> ''"
+    )) || []
+    const hasCache = cached.length && cached[0].c > 0
+    if (!hasCache) {
+      await refreshAll(true)
+    } else {
+      await loadAll(true)
+    }
+    await loadPlanning()
+  } catch (e) {
+    loading.value = false
+    const msg = (e && e.message) || '初始化失败'
+    console.error('[reading] onMounted error:', e)
+    uni.showToast({ title: msg, icon: 'none' })
   }
-  await loadPlanning()
 })
 
 function relTime(ts) {

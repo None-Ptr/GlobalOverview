@@ -65,7 +65,8 @@ onLoad(() => {
 function goBack() {
   const pages = getCurrentPages()
   if (pages && pages.length > 1) uni.navigateBack()
-  else uni.switchTab({ url: '/pages/mine/mine' })
+  // pages.json 未配置 tabBar，switchTab 必然失败；栈深为 1 时用 reLaunch 兜底
+  else uni.reLaunch({ url: '/pages/mine/mine' })
 }
 
 function save() {

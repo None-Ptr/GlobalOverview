@@ -59,7 +59,7 @@
           <text class="card-title">{{ a.title }}</text>
           <text class="gen" @click="genSet(a)">生成题集</text>
         </view>
-        <text class="card-meta">{{ a.wordCount || 0 }} 词</text>
+        <text class="card-meta">{{ a.wordCount || 0 }} 词<text v-if="hasCurated(a)" class="curated-tag">已精选</text></text>
         <view class="sets">
           <view
             v-for="s in setsByArticle(a.id)"
@@ -122,6 +122,7 @@ import { db } from '@/utils/db.js'
 import { generateSet, EXAM_MAP } from '@/utils/quiz.js'
 import { useAppStore } from '@/stores/app.js'
 import { useTransition } from '@/composables/useTransition'
+import { parseCurated, blocksToPlainText } from '@/utils/curate.js'
 
 const { sqlVal } = db
 const store = useAppStore()
@@ -161,7 +162,7 @@ async function load() {
 
     const plan = await db.select('SELECT articleId FROM plan_items')
     const ids = plan.map((p) => String(p.articleId))
-    const all = await db.select('SELECT id, guid, title, plainText, wordCount FROM articles')
+    const all = await db.select('SELECT id, guid, title, plainText, wordCount, curated_blocks FROM articles')
     articles.value = all.filter((a) => ids.includes(String(a.id)))
     await loadSets()
   } catch (e) {
@@ -212,7 +213,8 @@ async function genSet(article) {
       content: '出题需要大模型 API。请先去「我的 → LLM 模型配置」添加并保存一个模型。',
       confirmText: '去配置',
       cancelText: '取消',
-      success: (r) => { if (r.confirm) uni.switchTab({ url: '/pages/mine/mine' }) },
+      // pages.json 未配置 tabBar，switchTab 必然失败；统一用 reLaunch
+      success: (r) => { if (r.confirm) uni.reLaunch({ url: '/pages/mine/mine' }) },
     })
     return
   }
@@ -221,15 +223,24 @@ async function genSet(article) {
     const cfg = activePreset.value ? cfgOf(activePreset.value) : { ...DEFAULT_FORM, types: ['choice', 'fill'] }
     // 预设未指定 exam 时，用全局目标兜底
     cfg.globalGoal = store.globalGoal
+    // 若该文章有 AI 精选版，出题用精选后的正文（噪声会污染题干与干扰项），
+    // 否则用原文。quiz.js 消费的是 plainText，故在此转换，quiz.js 无需改动。
+    const curated = parseCurated(article.curated_blocks)
+    const feedArticle = curated
+      ? { ...article, plainText: blocksToPlainText(curated) }
+      : article
+    if (curated && (!feedArticle.plainText || feedArticle.plainText.length < 50)) {
+      throw new Error('精选版正文过短，请删除精选版后重试')
+    }
     const res = await generateSet({
-      article,
+      article: feedArticle,
       preset: cfg,
       profile,
       count: Number(cfg.count) || 5,
     })
     await loadSets()
     uni.showToast({
-      title: `生成 ${res.ok} 题${res.failed ? '，' + res.failed + ' 题失败' : ''}`,
+      title: `生成 ${res.ok} 题${res.failed ? '，' + res.failed + ' 题失败' : ''}${curated ? '（基于精选版）' : ''}`,
       icon: 'none',
     })
   } catch (e) {
@@ -237,6 +248,10 @@ async function genSet(article) {
   } finally {
     genning.value = false
   }
+}
+
+function hasCurated(a) {
+  return !!parseCurated(a && a.curated_blocks)
 }
 
 function openSet(s) { uni.navigateTo({ url: `/pages/quiz/quiz?setId=${s.id}` }) }
@@ -351,6 +366,15 @@ onShow(load)
 .card-top { display: flex; justify-content: space-between; align-items: center; gap: var(--go-sp-4); }
 .card-title { font-size: var(--go-fs-body); font-weight: var(--go-fw-semibold); flex: 1; color: var(--go-on-surface); line-height: var(--go-lh-snug); }
 .card-meta { font-size: var(--go-fs-meta); color: var(--go-on-surface-3); margin-top: var(--go-sp-2); display: block; }
+/* 已有 AI 精选版：出题将基于精选后的正文 */
+.curated-tag {
+  margin-left: var(--go-sp-2);
+  font-size: var(--go-fs-cap);
+  color: var(--go-primary);
+  background: var(--go-primary-95);
+  padding: 2rpx 12rpx;
+  border-radius: var(--go-r-full);
+}
 .gen {
   color: var(--go-on-primary);
   font-size: var(--go-fs-meta);

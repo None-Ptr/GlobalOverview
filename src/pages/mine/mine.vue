@@ -121,7 +121,7 @@
             <view class="go-row__chevron mi">›</view>
           </view>
           <view class="go-row" @click="clearCache">
-            <view class="go-row__icon"><GoIcon name="broom" class="mi" :size="'48rpx'" /></view>
+            <view class="go-row__icon"><GoIcon name="trash" class="mi" :size="'48rpx'" /></view>
             <view class="go-row__body">
               <view class="go-row__title">清除缓存</view>
               <view class="go-row__sub">清空抓取列表与词典缓存，保留题目与错题</view>
@@ -156,6 +156,7 @@ import { db } from '@/utils/db.js'
 import { EXAM_MAP } from '@/utils/quiz.js'
 import { loadCustomTranslators, deleteTranslator as removeTranslator } from '@/utils/customTranslate.js'
 import { loadTtsConfig } from '@/utils/tts.js'
+import { deobfuscateKey } from '@/utils/llm.js'
 
 const store = useAppStore()
 
@@ -216,6 +217,8 @@ async function deleteModel(m) {
       if (res.confirm) {
         models.value = models.value.filter((x) => x.id !== m.id)
         uni.setStorageSync(MODELS_KEY, models.value)
+        // 同步调用侧列表（llm_profiles）：否则已删除的模型仍会被 chat() 选中调用
+        store.setProfiles(models.value.map((p) => ({ ...p, apiKey: deobfuscateKey(p.apiKey) })))
       }
     }
   })

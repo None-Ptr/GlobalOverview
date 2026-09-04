@@ -93,7 +93,8 @@ async function translate_baidu(text, target) {
   const signRaw = BAIDU_APP_ID + q + salt + BAIDU_KEY
   const sign = CryptoJS.MD5(signRaw).toString()
   const url =
-    'http://api.fanyi.baidu.com/api/trans/vip/translate' +
+    // 必须用 https：http 明文传输会让 App Key 与正文内容在链路上可被窃取
+    'https://api.fanyi.baidu.com/api/trans/vip/translate' +
     `?q=${encodeURIComponent(q)}&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}` +
     `&appid=${encodeURIComponent(BAIDU_APP_ID)}&salt=${salt}&sign=${encodeURIComponent(sign)}`
   return baseTranslate(
@@ -251,12 +252,32 @@ function defaultEngine() {
   } catch (e) { return 'auto' }
 }
 
+// 按句末标点切句并保留标点（用于长文本分块）。
+// 不用后行断言 /(?<=[.!?])\s+/：它是 ES2018 正则语法，Chrome<62 / iOS<11.3
+// 的老 WebView 解析时会抛 SyntaxError，整段分块失败后长文翻译即不可用。
+function splitSentencesKeepDelim(s) {
+  const out = []
+  let start = 0
+  for (let i = 0; i < s.length; i++) {
+    if (!/[.!?。！？]/.test(s[i])) continue
+    let e = i + 1
+    while (e < s.length && /[.!?。！？]/.test(s[e])) e++
+    out.push(s.slice(start, e))
+    // 吞掉标点后的空白
+    while (e < s.length && /\s/.test(s[e])) e++
+    start = e
+    i = e - 1
+  }
+  if (start < s.length) out.push(s.slice(start))
+  return out.filter((x) => x.trim())
+}
+
 function splitText(text, limit = TRANSLATE_SPLIT_LIMIT) {
   const blocks = String(text || '').split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean)
   const out = []
   for (const b of blocks) {
     if (b.length <= limit) { out.push(b); continue }
-    const parts = b.split(/(?<=[.!?。！？])\s+/)
+    const parts = splitSentencesKeepDelim(b)
     let cur = ''
     for (const p of parts) {
       if (cur.length + p.length + 1 > limit) {

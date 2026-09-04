@@ -192,11 +192,8 @@ function toast(msg, icon) {
 
 async function load() {
   try {
-    toast('词汇: 初始化DB')
     await db.init()
-    toast('词汇: 同步旧生词')
     await syncHeadsFromCache()
-    toast('词汇: 读取词族')
     const list = await getHeads()
     const wc = await loadWordCache(1000)
     const wcMap = new Map()
@@ -205,7 +202,6 @@ async function load() {
       if (!wcMap.has(k)) wcMap.set(k, w)
     }
     // 一次性取全部出处并按 lemma 分组，避免逐词 N+1 查询
-    toast('词汇: 读取出处')
     const allOcc = await db.select(
       `SELECT articleGuid, articleTitle, sourceLabel, sentence, lemma FROM vocab_occ ORDER BY at DESC`
     ) || []
@@ -228,16 +224,13 @@ async function load() {
       }
     }
     heads.value = list
-    toast('词汇: 读取待复习')
     dueCount.value = await getDueCount()
-    toast('词汇: 读取句子')
     const rawSent = await getSentences()
     sentences.value = (rawSent || []).map((s) => {
       let a = null
       try { if (s.analysis) a = JSON.parse(s.analysis) } catch (e) { a = null }
       return { ...s, _analysis: a, _analyzing: false }
     })
-    toast('词汇: 加载完成')
   } catch (e) {
     const msg = (e && e.message) || e || '未知错误'
     console.error('[vocab] load error:', e)

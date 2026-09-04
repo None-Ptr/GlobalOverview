@@ -214,7 +214,7 @@ async function doExport() {
             } else if (tapIndex === 1) {
               try {
                 const shareReady = _checkShareReady();
-                if (shareReady && r.file && typeof plus !== 'undefined' && plus.share) {
+                if (shareReady && r.file && plus.share) {
                   plus.share.sendWithSystem({ type: 'file', files: [r.file], title: '练习卷导出' }, () => {}, () => {})
                 } else { uni.showToast({ title: '未找到可用的分享应用', icon: 'none' }) }
               } catch (e) { uni.showToast({ title: '分享失败', icon: 'none' }) }

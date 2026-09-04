@@ -72,8 +72,10 @@ function save(key, val) {
 
 function ymd(d) {
   const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
+  // 不用 padStart：它是 ES2017 API，老 Android System WebView 不存在，
+  // 会直接抛错导致打卡/徽章/首页全部失效。
+  const m = ('0' + (d.getMonth() + 1)).slice(-2)
+  const day = ('0' + d.getDate()).slice(-2)
   return `${y}-${m}-${day}`
 }
 function addDays(dateStr, n) {

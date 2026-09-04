@@ -93,7 +93,16 @@ const IRREGULAR = {
 const SUFFIX = [
   [/(?:ies)$/, 'y'],   // countries → country
   [/(?:ves)$/, 'f'],   // leaves → leaf
-  [/(?:es)$/, ''],     // watches → watch
+  // -es 复数：仅咝音结尾才需要额外保留字母，其余一律 es→e。
+  // 此前无条件的 /(?:es)$/→'' 会把 makes→mak、houses→hous、likes→lik，
+  // 词族归并被切碎（article.vue 直接用 lemmaOf 做词根）。
+  [/(?:ches)$/, 'ch'],   // watches → watch
+  [/(?:shes)$/, 'sh'],   // dishes  → dish
+  [/(?:sses)$/, 'ss'],   // classes → class
+  [/(?:xes)$/, 'x'],     // boxes   → box
+  [/(?:zzes)$/, 'z'],     // quizzes → quiz（去掉 zzes 后须补回 z，否则剩 "qui"）
+  [/(?:oes)$/, 'o'],     // heroes  → hero
+  [/(?:es)$/, 'e'],      // makes→make, houses→house, cases→case, sizes→size
   [/(?:ed)$/, ''],
   [/(?:ing)$/, ''],
   [/(?:ly)$/, ''],
@@ -126,6 +135,9 @@ export function lemmaOf(t) {
 // 阅读器查词成功时调用（isQuiz 下不调用）。把当前出处写入 vocab_occ，并聚合 vocab_head。
 export async function saveOccurrence({ word, lemma, articleGuid, articleTitle, sourceLabel, sentence, paraIndex, tokIndex }) {
   const head = lemma || lemmaOf(word)
+  // 短语/整句（无 lemma）属于「收藏的句子」(vocab_sentence)，不建 vocab_head，
+  // 避免污染词族/单词 tab 与复习队列（之前整句进单词 tab 的同类问题）。
+  const isWord = !!lemma
   const now = Date.now()
   await db.init()
   // 仅当本次是「新的真实出处」时才让 occCount +1，避免首次落库即 +1、重复点同一词被错误累加
@@ -137,7 +149,7 @@ export async function saveOccurrence({ word, lemma, articleGuid, articleTitle, s
        AND paraIndex = ${sqlVal(paraIndex)} AND tokIndex = ${sqlVal(tokIndex)} LIMIT 1`
   )
   const occExisting = !!(occRows && occRows.length)
-  if (!headRowsExisting) {
+  if (!headRowsExisting && isWord) {
     await db.execute(
       `INSERT INTO vocab_head (head, kind, firstSeen, lastSeen, occCount, fsrs_state, fsrs_due)
        VALUES (${sqlVal(head)}, 'word', ${sqlVal(now)}, ${sqlVal(now)}, 1, 0, ${sqlVal(firstDueFor(head, now))})`
@@ -184,21 +196,29 @@ export async function getOccurrence(word) {
 export async function syncHeadsFromCache() {
   await db.init()
   const now = Date.now()
-  // 清理脏数据：之前把整句/整段（选区查询、长文本翻译）也错误地同步成 head
-  await db.execute(
-    `DELETE FROM vocab_head WHERE length(head) > 80 OR length(head) - length(replace(head, ' ', '')) > 5`
-  )
-  // 只把真正的单词/短词同步成 head：排除 phrase（整句/选区翻译）和明显过长的文本
+  // 清理脏数据：整句/整段（长度>80 或空格>5）不应作为 head。
+  // 注意：内存引擎(sqlite 内存模拟)不支持 SQL 函数 length()/replace()，
+  // 若写成 `DELETE ... WHERE length(head) > 80` 会退化成「删除全表」。故在 JS 侧判断后按 head 精确删除。
+  const allHeads = await db.select(`SELECT head FROM vocab_head`) || []
+  for (const h of allHeads) {
+    const hd = String(h.head || '')
+    const dirty = hd.length > 80 || (hd.length - hd.replace(/ /g, '').length) > 5
+    if (dirty) await db.execute(`DELETE FROM vocab_head WHERE head = ${sqlVal(hd)}`)
+  }
+  // 只把真正的单词/短词同步成 head：排除 phrase（整句/选区翻译）和明显过长的文本。
+  // length/空格判断放在 JS 侧，避免内存引擎无法解析 SQL 函数。
   const rows = await db.select(
     `SELECT word, lemma, at, mode FROM word_cache
-     WHERE word IS NOT NULL AND mode IN ('en2zh', 'en2en')
-       AND length(word) <= 80
-       AND length(word) - length(replace(word, ' ', '')) <= 5`
+     WHERE word IS NOT NULL AND mode IN ('en2zh', 'en2en')`
   ) || []
-  if (rows.length) {
+  const cleanRows = rows.filter((r) => {
+    const w = String(r.word || '')
+    return w.length <= 80 && (w.length - w.replace(/ /g, '').length) <= 5
+  })
+  if (cleanRows.length) {
     const existing = await db.select(`SELECT head FROM vocab_head`) || []
     const have = new Set(existing.map((e) => e.head))
-    for (const r of rows) {
+    for (const r of cleanRows) {
       const head = (r.lemma && String(r.lemma)) || String(r.word).toLowerCase()
       if (!head || have.has(head)) continue
       have.add(head)
@@ -269,7 +289,6 @@ export async function setSentenceAnalysis(sentence, analysis) {
 
 // 对收藏句子调用用户已配置 LLM 做语法/语块拆解（锁定 JSON Schema，默认开启）
 export async function llmAnalyzeSentence(sentence) {
-  const { getProfiles, chat } = await import('./llm.js')
   const profiles = getProfiles()
   if (!profiles || !profiles.length) throw new Error('未配置 LLM')
   const sys = `你是英语语法与语块分析助手。只输出对象，不要解释、不要 markdown。结构：

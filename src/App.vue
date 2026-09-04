@@ -93,6 +93,9 @@ onHide(() => {})
 
   /* 阴影 */
   --go-elev-1: 0 1rpx 2rpx rgba(45, 42, 53, 0.06), 0 2rpx 6rpx rgba(45, 42, 53, 0.08);
+  /* elev-2 此前被 article.vue / review.vue 引用却从未定义，导致 box-shadow 整条
+     声明静默失效（阴影完全消失）。补齐该档，与 elev-1 / shadow-2 构成连续层级。 */
+  --go-elev-2: 0 2rpx 6rpx rgba(45, 42, 53, 0.08), 0 8rpx 20rpx rgba(45, 42, 53, 0.10);
   --go-shadow-1: 0 1rpx 2rpx rgba(45, 42, 53, 0.06), 0 2rpx 6rpx rgba(45, 42, 53, 0.08);
   --go-shadow-2: 0 2rpx 6rpx rgba(45, 42, 53, 0.08), 0 8rpx 20rpx rgba(45, 42, 53, 0.10);
   --go-shadow-3: 0 6rpx 16rpx rgba(45, 42, 53, 0.10), 0 16rpx 36rpx rgba(45, 42, 53, 0.12);

@@ -15,6 +15,9 @@
         <view class="go-icon-btn" :class="{ on: ttsPlaying }" @click="toggleReadAloud" :title="ttsPlaying ? '停止朗读' : '朗读全文（整篇已缓存则直接播放）'">
           <GoIcon :name="ttsPlaying ? 'stop' : 'tts'" :size="'52rpx'" />
         </view>
+        <view class="go-icon-btn" :class="{ on: useCurated }" @click="onCurateTap" :title="curateTitle">
+          <GoIcon name="trash" :size="'52rpx'" />
+        </view>
         <view class="go-icon-btn" @click="showSettings = !showSettings" title="设置">
           <GoIcon name="settings" :size="'52rpx'" />
         </view>
@@ -34,6 +37,7 @@
         <text v-if="cover.date" class="cover-date">{{ cover.date }}</text>
         <text v-if="cover.readMins" class="cover-dot">·</text>
         <text v-if="cover.readMins" class="cover-read">{{ cover.readMins }} 分钟阅读</text>
+        <text v-if="useCurated" class="cover-curated">AI 精选版</text>
       </view>
     </view>
 
@@ -64,7 +68,7 @@
             :class="{ on: reader.transEngine === e.id }"
             @click="setTransEngine(e.id)"
           >{{ e.name }}</text>
-          <text class="eng-chip eng-chip--manage" @click="manageTransEngines">⚙ 管理</text>
+          <text class="eng-chip eng-chip--manage" @click="manageTransEngines">管理</text>
         </view>
       </view>
       <view class="set-row">
@@ -165,6 +169,7 @@ import GoIcon from '@/components/GoIcon.vue'
 import { useTransition } from '@/composables/useTransition'
 import { fetchText } from '@/utils/http.js'
 import { extractArticle } from '@/utils/extract.js'
+import { curateArticle } from '@/utils/curate.js'
 import { getEngineNames } from '@/utils/translate.js'
 import { loadCustomTranslators } from '@/utils/customTranslate.js'
 import { speak as ttsSpeak, stopTts, loadTtsConfig, saveTtsConfig, TTS_VOICES, initTtsConfig } from '@/utils/tts.js'
@@ -178,11 +183,20 @@ const store = useAppStore()
 const bodyHtml = ref('')
 // 正文块序列（段落 + 图片）：优先来自入库的 blocks，否则由 plainText 退化
 const blocks = ref([])
+// AI 精选：curatedBlocks 为模型精简后的块序列（null = 未精选/已还原）。
+// 原文 blocks 永不改写，随时可切回。
+const curatedBlocks = ref(null)
+const useCurated = ref(false)
+const curating = ref(false)
+// 当前实际渲染的块序列：精选版优先（若已切换），否则原文
+const activeBlocks = computed(() =>
+  useCurated.value && curatedBlocks.value ? curatedBlocks.value : blocks.value
+)
 // App 端逐词点击/长按查词：加载纯文本并按段落拆分，逐词渲染为可点击片段。
 const plainText = ref('')
-// 段落序列直接派生自 blocks 的文本块，保证查词/选区索引与渲染完全一致
+// 段落序列直接派生自当前渲染块，保证查词/选区索引与渲染完全一致
 const paragraphs = computed(() =>
-  blocks.value.filter((b) => b.type === 'p').map((b) => b.text)
+  activeBlocks.value.filter((b) => b.type === 'p').map((b) => b.text)
 )
 const title = ref('')
 const guid = ref('')
@@ -418,10 +432,133 @@ async function loadArticle() {
     }
     // 原生端（无 DOM）依赖 plainText 渲染逐词查词；若为空（旧数据/未落库）则从 html 兜底派生
     ensurePlainText()
+    await loadCuratedIfAny()
   } catch (e) {
     error.value = e.message || '加载失败'
   } finally {
     loading.value = false
+  }
+}
+
+/* ---------------- AI 精选 ---------------- */
+
+// 读取已保存的精选版。注意：词汇中心的回溯锚点 (paraIndex/tokIndex) 基于原文，
+// 精选版删句后段落与词序都会变，因此「跳转准确性优先」——命中 focusPara 时强制显示原文。
+async function loadCuratedIfAny() {
+  curatedBlocks.value = null
+  useCurated.value = false
+  if (!articleId.value) return
+  try {
+    const c = await db.loadCurated(articleId.value)
+    if (c) {
+      curatedBlocks.value = c
+      useCurated.value = focusPara.value < 0
+    }
+  } catch (e) {
+    // 读取失败按「未精选」处理，不影响阅读
+  }
+}
+
+const curateTitle = computed(() => {
+  if (curating.value) return 'AI 精选中…'
+  if (useCurated.value) return '当前：AI 精选版（点击管理）'
+  if (curatedBlocks.value) return '当前：原文（点击切换到精选版）'
+  return 'AI 精选：去除正文噪声'
+})
+
+// 顶栏按钮：未精选 -> 执行；已精选 -> 弹出版本管理菜单
+function onCurateTap() {
+  if (curating.value) return
+  if (!curatedBlocks.value) {
+    runCurate()
+    return
+  }
+  uni.showActionSheet({
+    itemList: [
+      useCurated.value ? '切换到原文' : '切换到 AI 精选版',
+      '重新精选',
+      '删除精选版（还原原文）',
+    ],
+    success: (r) => {
+      if (r.tapIndex === 0) switchVersion()
+      else if (r.tapIndex === 1) runCurate()
+      else if (r.tapIndex === 2) removeCurated()
+    },
+  })
+}
+
+// 版本切换（手动）。切换后清空选区，避免索引错位
+function switchVersion() {
+  if (!curatedBlocks.value) return
+  useCurated.value = !useCurated.value
+  clearSelection()
+  uni.showToast({ title: useCurated.value ? '已切换到 AI 精选版' : '已切换回原文', icon: 'none' })
+}
+
+async function runCurate() {
+  // 重新同步模型列表（可能刚在「我的」页新增/编辑）
+  store.initProfiles()
+  const profile = store.activeProfile || (store.llmProfiles && store.llmProfiles[0])
+  if (!profile) {
+    uni.showModal({
+      title: '未配置模型',
+      content: 'AI 精选需要大模型 API。请先去「我的 → LLM 模型配置」添加并保存一个模型。',
+      confirmText: '去配置',
+      cancelText: '取消',
+      // pages.json 未配置 tabBar，switchTab 必然失败；统一用 reLaunch
+      success: (r) => { if (r.confirm) uni.reLaunch({ url: '/pages/mine/mine' }) },
+      showCancel: true,
+    })
+    return
+  }
+  if (!articleId.value) {
+    uni.showToast({ title: '文章未入库，无法精选', icon: 'none' })
+    return
+  }
+  curating.value = true
+  uni.showLoading({ title: 'AI 精选中…' })
+  try {
+    const res = await curateArticle(
+      { id: articleId.value, title: title.value, blocks: blocks.value, plainText: plainText.value },
+      profile
+    )
+    const tail = res.truncated ? '（正文过长，仅处理了前一部分）' : ''
+    if (!res.dropped || !res.blocks) {
+      // 未发现噪声：保留原文（空结果 = 合理结果，不是错误）
+      await db.clearCurated(articleId.value)
+      curatedBlocks.value = null
+      useCurated.value = false
+      uni.hideLoading()
+      uni.showToast({ title: 'AI 未发现可精简内容' + tail, icon: 'none' })
+      return
+    }
+    await db.saveCurated(articleId.value, res.blocks)
+    curatedBlocks.value = res.blocks
+    useCurated.value = true
+    clearSelection()
+    uni.hideLoading()
+    uni.showToast({
+      title: `已精简 ${res.dropped}/${res.total} 句` + tail,
+      icon: 'none',
+    })
+  } catch (e) {
+    uni.hideLoading()
+    uni.showModal({ title: 'AI 精选失败', content: e.message || '未知错误', showCancel: false })
+  } finally {
+    curating.value = false
+  }
+}
+
+async function removeCurated() {
+  if (!articleId.value) return
+  try {
+    await db.clearCurated(articleId.value)
+    curatedBlocks.value = null
+    useCurated.value = false
+    clearSelection()
+    uni.showToast({ title: '已还原原文', icon: 'none' })
+  } catch (e) {
+    uni.showToast({ title: '还原失败：' + (e.message || ''), icon: 'none' })
   }
 }
 
@@ -439,7 +576,7 @@ function onImgTap(src) {
   if (!src) return
   // 预览大图只支持文件路径 / http(s) URL，base64 data: 无法预览，直接忽略
   if (src.startsWith('data:')) return
-  const urls = blocks.value
+  const urls = activeBlocks.value
     .filter((b) => b.type === 'img' && b.src && !b.src.startsWith('data:'))
     .map((b) => b.src)
   if (!urls.length) return
@@ -455,15 +592,15 @@ function onImgTap(src) {
 const paraIndexMap = computed(() => {
   const arr = []
   let n = 0
-  for (let i = 0; i < blocks.value.length; i++) {
-    if (blocks.value[i].type === 'p') { arr.push(n); n++ } else arr.push(-1)
+  for (let i = 0; i < activeBlocks.value.length; i++) {
+    if (activeBlocks.value[i].type === 'p') { arr.push(n); n++ } else arr.push(-1)
   }
   return arr
 })
 
 // 预计算 tokenize 结果并写入每个文本块的 toks 字段，避免每次渲染对全文重新切词。
 // 模板直接消费 b.toks，配合 paraIndexMap 彻底消除重渲染时的重复计算。
-const tokenizedBlocks = computed(() => blocks.value.map((b) =>
+const tokenizedBlocks = computed(() => activeBlocks.value.map((b) =>
   b.type === 'p' ? { ...b, toks: tokenize(b.text) } : b
 ))
 
@@ -479,7 +616,7 @@ function imgSrc(b) {
 
 // 图片加载失败：先重试（最多 2 次，追加缓存穿透参数），仍失败才隐藏该图块
 function onImgError(bi) {
-  const b = blocks.value[bi]
+  const b = activeBlocks.value[bi]
   if (!b) return
   if (!b._retry) b._retry = 1
   else if (b._retry < 2) b._retry += 1
@@ -697,7 +834,7 @@ onMounted(() => {
 // 从词汇中心回溯跳转：滚动到原句并闪烁高亮目标词
 function locateFocus() {
   const bi = paraIndexMap.value.indexOf(focusPara.value)
-  if (bi < 0 || bi >= blocks.value.length) return // 文章结构变化则静默忽略
+  if (bi < 0 || bi >= activeBlocks.value.length) return // 文章结构变化则静默忽略
   scrollIntoId.value = 'para-' + bi
   if (focusTok.value >= 0) {
     flash.value = { bi, ti: focusTok.value }
@@ -942,6 +1079,15 @@ onUnmounted(() => {
   gap: var(--go-sp-2);
   font-size: var(--go-fs-meta);
   color: var(--go-on-surface-3);
+}
+/* 当前为 AI 精选版的可见标记（顶栏按钮的 title 提示在移动端不可见） */
+.cover-curated {
+  font-size: var(--go-fs-cap);
+  font-weight: var(--go-fw-semibold);
+  color: var(--go-primary);
+  background: var(--go-primary-95);
+  padding: 2rpx 12rpx;
+  border-radius: var(--go-r-full);
 }
 
 /* 选择模式提示条 */
