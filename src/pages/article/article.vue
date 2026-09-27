@@ -32,7 +32,16 @@
     <!-- 文章封面（ReadYou 风格：衬线大标题 + 来源 + 阅读时长） -->
     <view v-if="!loading && !error && (title || cover.source)" class="cover">
       <text v-if="cover.source" class="cover-source">{{ cover.source }}</text>
-      <text class="cover-title">{{ title || '未命名文章' }}</text>
+      <!-- 标题与正文同一套逐词渲染：单击查词 · 长按选中整句 · 选择模式累积选区（pi=-1 标识标题） -->
+      <view class="cover-title"><template v-for="(tk, ti) in titleToks" :key="ti"><view
+          v-if="tk.word"
+          :class="['tok tok--word', { 'tok--sel': isSel(-1, ti) }]"
+          @click="onTitleTok(tk, false, ti)"
+          @longpress="onTitleTok(tk, true, ti)"
+        ><text>{{ tk.text }}</text></view><text
+          v-else
+          class="tok"
+        >{{ tk.text }}</text></template></view>
       <view class="cover-meta">
         <text v-if="cover.date" class="cover-date">{{ cover.date }}</text>
         <text v-if="cover.readMins" class="cover-dot">·</text>
@@ -604,6 +613,9 @@ const tokenizedBlocks = computed(() => activeBlocks.value.map((b) =>
   b.type === 'p' ? { ...b, toks: tokenize(b.text) } : b
 ))
 
+// 标题同样逐词切分（复用正文 tokenize），供封面标题点词查询
+const titleToks = computed(() => tokenize(title.value || ''))
+
 // 图片 URL：失败重试时追加缓存穿透参数，触发 <image> 重新加载
 function imgSrc(b) {
   if (!b || !b.src) return ''
@@ -706,6 +718,35 @@ function onNativeTok(tk, isLong, ctx, pi, ti) {
       sourceLabel: cover.value.source,
       sentence,
       paraIndex: pi,
+      tokIndex: ti,
+    }).catch(() => {})
+  }
+  openWord(tk.text, '')
+}
+
+// 标题点词：与正文 onNativeTok 同一交互——选择模式累积选区（pi=-1 标识标题）、
+// 短按查词、长按选中完整标题弹选区条；出处锚点 paraIndex 固定 -1（标题无段落序号，
+// 词汇中心回溯时 locateFocus 命中不到会静默忽略，不影响正文锚点）
+function onTitleTok(tk, isLong, ti) {
+  if (!tk || !tk.word) return
+  if (selectMode.value) {
+    toggleSelToken(tk, -1, ti)
+    return
+  }
+  if (isLong) {
+    const t = (title.value || '').trim()
+    if (t) selection.value = { text: t.slice(0, 400), context: t }
+    return
+  }
+  if (!isQuiz.value) {
+    saveOccurrence({
+      word: tk.text,
+      lemma: lemmaOf(tk.text),
+      articleGuid: guid.value,
+      articleTitle: title.value,
+      sourceLabel: cover.value.source,
+      sentence: (title.value || '').trim(),
+      paraIndex: -1,
       tokIndex: ti,
     }).catch(() => {})
   }

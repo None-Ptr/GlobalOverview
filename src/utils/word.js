@@ -74,7 +74,39 @@ function pickProfile(llmConfig) {
   return list && list.length ? list[0] : null
 }
 
-async function fetchEn2ZhByLLM(word, llmConfig) {
+// dictionaryapi.dev 返回英文词性标签，统一映射为词典惯例缩写
+const POS_ZH = {
+  noun: 'n.', verb: 'v.', adjective: 'adj.', adverb: 'adv.',
+  pronoun: 'pron.', preposition: 'prep.', conjunction: 'conj.',
+  interjection: 'int.', exclamation: 'int.', determiner: 'det.',
+  numeral: 'num.', article: 'art.', particle: 'part.', auxiliary: 'aux.',
+}
+function posAbbr(pos) {
+  return POS_ZH[String(pos || '').toLowerCase()] || pos || ''
+}
+
+// 无 LLM 时的富释义路径：词典结构（音标 + 词性 + 多义项）+ 翻译引擎批量译出
+// 中文释义，组合成结构化词卡，避免「整词翻译只回一个中文词」的信息损失。
+async function fetchEn2ZhByDict(word) {
+  const dict = await fetchEn2En(word)
+  let zhDefs = []
+  try {
+    // 全部释义用换行拼成单块一次翻译（百度 QPS=1，逐条翻译会触发频率限制）；
+    // translate() 按空行分块，单个换行保持在同一块内，引擎一般按行保留
+    const joined = await translate(dict.senses.map((s) => s.definition).join('\n'), { target: 'ZH' })
+    zhDefs = String(joined).split(/\n+/).map((s) => s.trim()).filter(Boolean)
+  } catch (e) { zhDefs = [] }
+  // 行数对不上（引擎合并/拆行）时保留英文释义——音标/词性/多义项结构仍在
+  const aligned = zhDefs.length === dict.senses.length
+  const senses = dict.senses.map((s, i) => ({
+    pos: posAbbr(s.pos),
+    definition: aligned ? zhDefs[i] : s.definition,
+    example: s.example,
+  }))
+  return { kind: 'dict', word: dict.word || word, phonetic: dict.phonetic, senses }
+}
+
+async function fetchEn2Zh(word, llmConfig) {
   const profile = pickProfile(llmConfig)
   if (profile) {
     try {
@@ -85,8 +117,13 @@ async function fetchEn2ZhByLLM(word, llmConfig) {
       return { kind: 'text', word, text: String(text).trim() }
     } catch (e) {}
   }
-  const text = await translate(word, { target: 'ZH' })
-  return { kind: 'text', word, text: String(text).trim() }
+  try {
+    return await fetchEn2ZhByDict(word)
+  } catch (e) {
+    // 词典未收录/服务异常：退化为整词翻译，保证任何情况下都有结果
+    const text = await translate(word, { target: 'ZH' })
+    return { kind: 'text', word, text: String(text).trim() }
+  }
 }
 
 async function fetchPhraseByLLM(phrase, context, llmConfig) {
@@ -133,7 +170,7 @@ export async function lookupWord(text, mode = 'en2zh', llmConfig = null, context
   } else if (mode === 'en2en') {
     result = await fetchEn2En(q)
   } else {
-    result = await fetchEn2ZhByLLM(q, llmConfig)
+    result = await fetchEn2Zh(q, llmConfig)
   }
 
   const lemma = kind === 'phrase' ? null : lemmaOf(q)
