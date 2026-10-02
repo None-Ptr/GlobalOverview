@@ -1,7 +1,8 @@
 <div align="center">
 <p align="center">
-<img src="src/static/logo.png" alt="GlobalOverview" width="160"/>
+<img src="assets/icon/app_icon.png" alt="GlobalOverview" width="160"/>
 </p>
+
 
 # GlobalOverview
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
