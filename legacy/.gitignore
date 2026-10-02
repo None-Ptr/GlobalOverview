@@ -31,3 +31,4 @@ build_apk.bat
 *.apk
 init.md
 rss.md
+.codebuddy

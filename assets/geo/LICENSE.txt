@@ -1,0 +1,14 @@
+world_land.json — 世界陆地轮廓数据
+================================================
+
+来源：Natural Earth，1:110m 尺度（Physical > Land）矢量数据。
+      https://www.naturalearthdata.com/
+
+许可：Public Domain（公共领域）。Natural Earth 明确声明其数据无版权限制，
+      可自由用于任何目的，无需署名。
+
+处理：原始 GeoJSON 经本仓库脚本处理——抽稀（Ramer–Douglas–Peucker，
+      epsilon≈0.35°）、坐标归整到 0.1°、剔除过小岛屿，得到 116 个多边形环、
+      约 2185 个坐标点的紧凑版本，用于 App 内的程序化地球绘制。
+
+说明：本数据仅用于装饰性星球渲染（线框地球背景），不作为精确地理/政治边界使用。

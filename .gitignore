@@ -1,0 +1,70 @@
+# Miscellaneous
+*.class
+*.log
+*.py
+*.pyc
+*.DS_Store
+analysis_options.yaml
+
+# Generated files
+*.generated.*
+*.g.dart
+
+# Flutter / Dart / Pub
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+build/
+flutter_*.png
+.fvm/
+
+# Android
+android/.gradle/
+android/app/debug/
+android/app/profile/
+android/app/release/
+
+# IntelliJ / IDE
+*.iml
+*.ipr
+*.iws
+
+# Xcode
+ios/**/dgph
+ios/**/xcuserdata/
+**/mode1v3
+**/mode2v3
+**/pbxuser
+**/perspectivev3
+**/xcworkspace/
+**/xcshareddata/
+**/xcbinarydata/
+*.hmap
+*.ipa
+*.xcarchive
+*.dSYM.zip
+*.dSYM
+
+# macOS
+macos/Flutter/GeneratedPluginRegistrant.swift
+macos/Flutter/ephemeral/
+macos/Flutter/flutter_export_environment.sh
+
+# Windows / Linux desktop
+windows/flutter/generated_plugin_registrant.cc
+linux/flutter/generated_plugin_registrant.cc
+linux/flutter/generated_plugins.cmake
+
+# Web
+web/icons/Icon-*.png
+
+# Old uni-app build artifacts (archived under legacy/, keep out of vcs)
+node_modules/
+dist/
+
+# Bundled SDK artifacts
+Android-SDK@*/
+
+.codebuddy
