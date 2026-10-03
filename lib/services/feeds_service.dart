@@ -3,6 +3,7 @@ import 'package:global_overview/services/db_service.dart';
 import 'package:global_overview/services/rss_service.dart';
 import 'package:global_overview/services/http_service.dart';
 import 'package:global_overview/services/extract_service.dart';
+import 'package:global_overview/services/app_exception.dart';
 import 'package:global_overview/models/models.dart';
 import 'package:global_overview/services/feeds_data.dart';
 
@@ -12,14 +13,23 @@ class FeedsService {
   final HttpService _http;
   FeedsService(this._db, this._rss, this._http);
 
-  Future<void> addFeed(String url, String title, String category) async {
-    await _db.execute('INSERT OR IGNORE INTO feeds (title, url, category, addedAt) VALUES (?,?,?,?)',
-        [title, url, category, DateTime.now().millisecondsSinceEpoch]);
-    final rows = await _db.select('SELECT id FROM feeds WHERE url = ?', [url]);
-    if (rows.isNotEmpty) {
-      await _db.execute('UPDATE feeds SET title = ?, category = ? WHERE id = ?', [title, category, rows.first['id']]);
-    }
-  }
+  /// 批量 SQL 的每批行数：feed_items 每行 7 个参数，100 行 = 700 个绑定参数，
+  /// 远低于 SQLite 旧版 999 的单语句上限。
+  static const _sqlChunk = 100;
+
+  static const minPlainChars = 300;
+
+  static const blockedMarkers = <String>[
+    'just a moment',
+    'attention required',
+    'access denied',
+    'enable javascript',
+    '403 forbidden',
+    'please log in',
+    'subscribe to continue',
+    'checking your browser',
+    'ddos protection',
+  ];
 
   Future<List<Feed>> listFeeds() async {
     final rows = await _db.select('SELECT * FROM feeds ORDER BY addedAt DESC');
@@ -31,28 +41,6 @@ class FeedsService {
     await _db.execute('DELETE FROM feed_items WHERE feedId = ?', [id]);
   }
 
-  Future<int> fetchAll() async {
-    final feeds = await listFeeds();
-    var added = 0;
-    for (final f in feeds) {
-      try {
-        final items = await _rss.fetch(f.url!);
-        for (final it in items) {
-          final exist = await _db.select('SELECT id FROM feed_items WHERE feedId = ? AND guid = ?', [f.id, it.guid]);
-          if (exist.isEmpty) {
-            await _db.execute(
-                'INSERT INTO feed_items (feedId, guid, title, link, preview, pubDate, fetchedAt) VALUES (?,?,?,?,?,?,?)',
-                [f.id, it.guid, it.title, it.link, it.preview, it.pubDate, DateTime.now().millisecondsSinceEpoch]);
-            added++;
-          }
-        }
-      } catch (_) {
-        await _db.execute('UPDATE feeds SET failCount = COALESCE(failCount,0) + 1 WHERE id = ?', [f.id]);
-      }
-    }
-    return added;
-  }
-
   Future<List<FeedItem>> items({int? feedId, int limit = 50}) async {
     final sql = feedId == null
         ? 'SELECT * FROM feed_items ORDER BY pubDate DESC LIMIT ?'
@@ -62,15 +50,52 @@ class FeedsService {
     return rows.map((e) => FeedItem.fromMap(e)).toList();
   }
 
-  Future<int> captureArticle(String guid, String link, String title) async {
+  Future<({int id, bool fresh})> captureArticle(String guid, String link, String title, {bool force = false}) async {
     final exist = await _db.select('SELECT id FROM articles WHERE guid = ?', [guid]);
-    if (exist.isNotEmpty) return exist.first['id'] as int;
-    final html = await _http.getText(link);
+    final oldId = exist.isEmpty ? null : exist.first['id'] as int;
+    if (oldId != null && !force) return (id: oldId, fresh: false);
+    final html = await _http.getText(link, retry: RetryPolicy.manual);
     final ex = ExtractService().extract(html, url: link);
+    _guard(ex, link);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (oldId != null) {
+      await _db.execute(
+        'UPDATE articles SET title=?, author=?, sourceUrl=?, html=?, plainText=?, blocks=?, wordCount=?, capturedAt=? WHERE id=?',
+        [ex.title ?? title, ex.author, link, html, ex.plainText, jsonEncode(ex.blocks.map((b) => b.toJson()).toList()), ex.wordCount, now, oldId],
+      );
+      return (id: oldId, fresh: true);
+    }
     final id = await _db.insertReturnId(
-        'INSERT INTO articles (guid, title, author, sourceUrl, html, plainText, blocks, wordCount, capturedAt) VALUES (?,?,?,?,?,?,?,?,?)',
-        [guid, ex.title ?? title, ex.author, link, html, ex.plainText, jsonEncode(ex.blocks.map((b) => b.toJson()).toList()), ex.wordCount, DateTime.now().millisecondsSinceEpoch]);
-    return id;
+      'INSERT INTO articles (guid, title, author, sourceUrl, html, plainText, blocks, wordCount, capturedAt) VALUES (?,?,?,?,?,?,?,?,?)',
+      [guid, ex.title ?? title, ex.author, link, html, ex.plainText, jsonEncode(ex.blocks.map((b) => b.toJson()).toList()), ex.wordCount, now],
+    );
+    return (id: id, fresh: true);
+  }
+
+  /// 早于抓取守卫入库的历史数据：正文过短或缺失，视为不可用。
+  Future<bool> looksUnusable(int articleId) async {
+    final rows = await _db.select('SELECT wordCount, plainText FROM articles WHERE id = ?', [articleId]);
+    if (rows.isEmpty) return false;
+    final words = (rows.first['wordCount'] as int?) ?? 0;
+    final plain = (rows.first['plainText'] as String?) ?? '';
+    return words < 20 || plain.trim().length < minPlainChars;
+  }
+
+  /// 抓取成功判定：状态码由 HttpService把关，这里只管正文质量。
+  void _guard(ExtractResult ex, String link) {
+    final text = ex.plainText.trim();
+    if (text.isEmpty || !ex.blocks.any((b) => b.type == 'p' && (b.text ?? '').trim().isNotEmpty)) {
+      throw AppException('emptyArticle', '没有抓到正文', detail: link);
+    }
+    if (text.length < minPlainChars) {
+      throw AppException('tooShort', '正文过短（${text.length} 字），可能是付费墙或错误页', detail: link);
+    }
+    final lower = text.toLowerCase();
+    for (final marker in blockedMarkers) {
+      if (lower.contains(marker)) {
+        throw AppException('blocked', '抓到的是拦截页而不是正文', detail: '$link · $marker');
+      }
+    }
   }
 
   // ================= 阅读页所需（对齐 reading.vue） =================
@@ -101,34 +126,51 @@ class FeedsService {
   }
 
   /// 抓取并入库单个源。返回 (ok, count, failCount)。
-  Future<({bool ok, int count, int failCount})> fetchFeedInto(Feed feed, bool replaceCache) async {
+  Future<({bool ok, int count, int failCount, String? error})> fetchFeedInto(
+    Feed feed,
+    bool replaceCache, {
+    DateTime? deadline,
+  }) async {
     try {
-      final items = await _rss.fetch(feed.url!);
+      final items = await _rss.fetch(feed.url!, retry: RetryPolicy.until(deadline));
       final list = items.where((it) => it.title.trim().isNotEmpty).toList();
       if (list.isEmpty) {
         await _resetFail(feed);
-        return (ok: true, count: 0, failCount: 0);
+        return (ok: true, count: 0, failCount: 0, error: null);
       }
-      final guids = list.map((e) => e.guid).toList();
-      if (replaceCache) {
-        for (final g in guids) {
-          await _db.execute('DELETE FROM feed_items WHERE feedId = ? AND guid = ?', [feed.id, g]);
-        }
-      }
+      // 一次查出该源已有的 guid（走 UNIQUE(feedId, guid) 前缀索引），
+      // 取代旧的「每篇一次 SELECT + 一次 INSERT + 一次 DELETE」的 N+1 写法
+      // （30 篇 = 90 次 round-trip，14 个源一次刷新 ≈ 1260 次平台通道往返）。
+      final existing = <String>{
+        for (final r in await _db.select('SELECT guid FROM feed_items WHERE feedId = ?', [feed.id])) '${r['guid']}',
+      };
+      final fresh = list.where((it) => !existing.contains(it.guid)).toList();
+
+      // 刷新模式：INSERT OR REPLACE 全量重插（旧实现是逐条 DELETE 后再逐条 INSERT，
+      // 目的是刷新标题/预览/时间；feed 里已消失的旧条目两种写法都会保留）。
+      // 追加模式：只补新条目。
+      final toInsert = replaceCache ? list : fresh;
+      final verb = replaceCache ? 'INSERT OR REPLACE' : 'INSERT OR IGNORE';
       var added = 0;
-      for (final it in list) {
-        final exist = await _db.select('SELECT id FROM feed_items WHERE feedId = ? AND guid = ?', [feed.id, it.guid]);
-        if (exist.isNotEmpty) continue;
+      for (var i = 0; i < toInsert.length; i += _sqlChunk) {
+        final chunk = toInsert.skip(i).take(_sqlChunk).toList();
+        final ph = chunk.map((_) => '(?,?,?,?,?,?,?)').join(',');
+        final values = <Object?>[];
+        final now = DateTime.now().millisecondsSinceEpoch;
+        for (final it in chunk) {
+          values.addAll([feed.id, it.guid, it.title, it.link, it.preview, it.pubDate, now]);
+        }
         await _db.execute(
-            'INSERT OR IGNORE INTO feed_items (feedId, guid, title, link, preview, pubDate, fetchedAt) VALUES (?,?,?,?,?,?,?)',
-            [feed.id, it.guid, it.title, it.link, it.preview, it.pubDate, DateTime.now().millisecondsSinceEpoch]);
-        added++;
+          '$verb INTO feed_items (feedId, guid, title, link, preview, pubDate, fetchedAt) VALUES $ph',
+          values,
+        );
+        added += chunk.length;
       }
       await _resetFail(feed);
-      return (ok: true, count: added, failCount: 0);
-    } catch (_) {
+      return (ok: true, count: added, failCount: 0, error: null);
+    } catch (e) {
       final n = await _bumpFail(feed);
-      return (ok: false, count: 0, failCount: n);
+      return (ok: false, count: 0, failCount: n, error: errText(e));
     }
   }
 

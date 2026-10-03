@@ -14,8 +14,8 @@ class RssService {
   final HttpService _http;
   RssService(this._http);
 
-  Future<List<RssItem>> fetch(String url) async {
-    final xmlText = await _http.getText(url);
+  Future<List<RssItem>> fetch(String url, {RetryPolicy retry = RetryPolicy.none}) async {
+    final xmlText = await _http.getText(url, retry: retry);
     final doc = XmlDocument.parse(_safeXml(xmlText));
     final items = <RssItem>[];
 

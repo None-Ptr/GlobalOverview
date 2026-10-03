@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:global_overview/providers/providers.dart';
+import 'package:global_overview/services/app_exception.dart';
 import 'package:global_overview/services/quiz_service.dart';
 import 'package:global_overview/screens/quiz_screen.dart';
 import 'package:global_overview/screens/export_screen.dart';
@@ -72,7 +73,7 @@ class _WrongScreenState extends ConsumerState<WrongScreen> {
       out.sort((a, b) => (b['gradedAt'] as int? ?? 0).compareTo(a['gradedAt'] as int? ?? 0));
       if (mounted) setState(() => _list = out);
     } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted) setState(() => _error = errText(e));
     } finally {
       if (mounted) setState(() => _loading = false);
     }

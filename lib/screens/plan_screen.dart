@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:global_overview/providers/providers.dart';
+import 'package:global_overview/services/app_exception.dart';
 import 'package:global_overview/services/quiz_service.dart';
 import 'package:global_overview/screens/quiz_screen.dart';
 import 'package:global_overview/screens/export_screen.dart';
@@ -64,7 +65,7 @@ class _PlanScreenState extends ConsumerState<PlanScreen> {
       _articles = all.where((a) => ids.contains('${a['id']}')).toList();
       await _loadSets();
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errText(e))));
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -135,7 +136,7 @@ class _PlanScreenState extends ConsumerState<PlanScreen> {
       }
     } catch (e) {
       if (mounted) {
-        showDialog(context: context, builder: (c) => AlertDialog(title: const Text('生成失败'), content: Text('$e'), actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('确定'))]));
+        showDialog(context: context, builder: (c) => AlertDialog(title: const Text('生成失败'), content: Text(errText(e)), actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('确定'))]));
       }
     } finally {
       if (mounted) setState(() => _genning = false);

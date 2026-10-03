@@ -1,8 +1,13 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:global_overview/models/models.dart';
 import 'package:global_overview/providers/providers.dart';
+import 'package:global_overview/services/app_exception.dart';
+import 'package:global_overview/services/tts_service.dart';
 import 'package:global_overview/services/translate_service.dart';
 import 'package:global_overview/theme/go_tokens.dart';
 import 'package:global_overview/widgets/go_ui.dart';
@@ -15,6 +20,16 @@ class ArticleScreen extends ConsumerStatefulWidget {
   final int focusPara;
   final int focusTok;
   const ArticleScreen({super.key, this.articleId, this.guid, this.title, this.quiz = false, this.focusPara = -1, this.focusTok = -1});
+
+  /// 选区文本 → 查询文本。
+  /// 单个词：削掉单词周围的标点（`word,` → `word`）；
+  /// 整句 / 多词：**原样保留**，不能像以前那样把空格也一起删掉（否则词与词会黏成一串）。
+  @visibleForTesting
+  static String cleanQueryText(String text) {
+    final t = text.replaceAll('\u00A0', ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (t.isEmpty || t.contains(' ')) return t;
+    return t.replaceAll(RegExp(r"[^A-Za-z'’\-]"), '').trim();
+  }
 
   @override
   ConsumerState<ArticleScreen> createState() => _ArticleScreenState();
@@ -43,7 +58,17 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
   bool _showSettings = false;
   String _selText = '';
   bool _selectMode = false;
-  final List<({int pi, int ti, String text})> _selTokens = [];
+
+  /// 选中词用 (pi << 20 | ti) 编码进 Set：判定 O(1)（旧实现是列表线性扫描）。
+  final Set<int> _sel = <int>{};
+  final ValueNotifier<int> _selVer = ValueNotifier<int>(0);
+
+  /// 分词与字符偏移表缓存：旧实现在 build 里逐段重新分词，改为按 blocks 身份缓存。
+  List<ArticleBlock>? _tokBlocks;
+  List<ArticleBlock>? _tokCurated;
+  bool _tokUseCurated = false;
+  List<List<_Tok>> _paraToks = const [];
+  List<List<int>> _paraStarts = const [];
 
   bool _ttsPlaying = false;
   bool _ttsSynthesizing = false;
@@ -60,13 +85,16 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
   List<String> get _paragraphs =>
       _activeBlocks.where((b) => b.type == 'p').map((b) => b.text ?? '').toList();
 
+  late final TtsService _tts;
+
   @override
   void initState() {
     super.initState();
     _guid = widget.guid ?? '';
     _title = widget.title ?? '';
     _load();
-    ref.read(ttsProvider).playing.addListener(_onTtsChanged);
+    _tts = ref.read(ttsProvider);
+    _tts.playing.addListener(_onTtsChanged);
   }
 
   void _onTtsChanged() {
@@ -79,8 +107,9 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
 
   @override
   void dispose() {
-    ref.read(ttsProvider).playing.removeListener(_onTtsChanged);
-    ref.read(ttsProvider).stop();
+    // Riverpod 3 禁止在 dispose 里用 ref（会抛 StateError，导致 stop() 根本没执行）
+    _tts.playing.removeListener(_onTtsChanged);
+    _tts.stop();
     _scrollCtrl.dispose();
     super.dispose();
   }
@@ -112,7 +141,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
       }
       await _loadCuratedIfAny();
     } catch (e) {
-      _error = '$e';
+      _error = errText(e);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -213,31 +242,72 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
   }
 
   // ================= 选区 =================
-  String get _selectedText => _selTokens.map((t) => t.text).join(' ').trim();
+  static int _selKey(int pi, int ti) => (pi << 20) | ti;
 
-  bool _isSel(int pi, int ti) => _selTokens.any((t) => t.pi == pi && t.ti == ti);
+  /// 按 key 排序即为文档顺序，因此不必额外维护插入顺序。
+  String get _selectedText {
+    if (_sel.isEmpty) return '';
+    final keys = _sel.toList()..sort();
+    final out = <String>[];
+    for (final k in keys) {
+      final pi = k >> 20;
+      final ti = k & 0xFFFFF;
+      final toks = pi < _paraToks.length ? _paraToks[pi] : const <_Tok>[];
+      if (ti < toks.length) out.add(toks[ti].text);
+    }
+    return out.join(' ').trim();
+  }
 
-  void _toggleSelToken(String text, int pi, int ti) {
-    final idx = _selTokens.indexWhere((t) => t.pi == pi && t.ti == ti);
-    setState(() {
-      if (idx >= 0) {
-        _selTokens.removeAt(idx);
-      } else {
-        _selTokens.add((pi: pi, ti: ti, text: text));
-      }
-    });
+  /// 只更新集合并自增版本号：正文整体不重建，由各段自行判断是否需要重绘。
+  void _toggleSelToken(int pi, int ti) {
+    final k = _selKey(pi, ti);
+    if (_sel.contains(k)) {
+      _sel.remove(k);
+    } else {
+      _sel.add(k);
+    }
+    _selVer.value++;
   }
 
   void _clearSelection() {
-    setState(() {
-      _selText = '';
-      _selTokens.clear();
-      _selectMode = false;
-    });
+    if (_sel.isNotEmpty) {
+      _sel.clear();
+      _selVer.value++;
+    }
+    if (_selText.isNotEmpty || _selectMode) {
+      setState(() {
+        _selText = '';
+        _selectMode = false;
+      });
+    }
+  }
+
+  void _syncToks() {
+    final blocks = _blocks;
+    final curated = _curatedBlocks;
+    final use = _useCurated;
+    if (identical(_tokBlocks, blocks) && identical(_tokCurated, curated) && _tokUseCurated == use) return;
+    _tokBlocks = blocks;
+    _tokCurated = curated;
+    _tokUseCurated = use;
+    final paras = _paragraphs;
+    _paraToks = [for (final p in paras) _tokenize(p)];
+    _paraStarts = [for (final t in _paraToks) _tokenOffsets(t)];
+  }
+
+  /// 各 token 在整段文本中的起始字符偏移（含 2 字符首行缩进），供二分查找定位。
+  static List<int> _tokenOffsets(List<_Tok> toks) {
+    final out = <int>[];
+    var acc = 2;
+    for (final t in toks) {
+      out.add(acc);
+      acc += t.text.length;
+    }
+    return out;
   }
 
   void _openWord(String text) {
-    final clean = text.replaceAll(RegExp(r"[^A-Za-z'’\-]"), '').trim();
+    final clean = ArticleScreen.cleanQueryText(text);
     if (clean.isEmpty) return;
     showModalBottomSheet<void>(
       context: context,
@@ -261,7 +331,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
   void _onTok(_Tok tk, bool isLong, String ctx, int pi, int ti, {bool isTitle = false}) {
     if (!tk.word) return;
     if (_selectMode) {
-      _toggleSelToken(tk.text, pi, ti);
+      _toggleSelToken(pi, ti);
       return;
     }
     if (isLong) {
@@ -394,8 +464,10 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     setState(() => _curating = true);
     try {
       final res = await ref.read(curateProvider).curate(_blocks);
+      if (!mounted) return;
       if (res.isEmpty) {
         await ref.read(dbProvider).clearCurated(_articleId);
+        if (!mounted) return;
         setState(() {
           _curatedBlocks = null;
           _useCurated = false;
@@ -406,6 +478,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
         return;
       }
       await ref.read(dbProvider).saveCurated(_articleId, res.map((b) => b.toJson()).toList());
+      if (!mounted) return;
       final summary = _curateSummary(_blocks, res);
       setState(() {
         _curatedBlocks = res;
@@ -417,7 +490,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
       }
     } catch (e) {
       if (mounted) {
-        showDialog(context: context, builder: (c) => AlertDialog(title: const Text('AI 精选失败'), content: Text('$e'), actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('确定'))]));
+        showDialog(context: context, builder: (c) => AlertDialog(title: const Text('AI 精选失败'), content: Text(errText(e)), actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('确定'))]));
       }
     } finally {
       if (mounted) setState(() => _curating = false);
@@ -427,6 +500,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
   Future<void> _removeCurated() async {
     if (_articleId == 0) return;
     await ref.read(dbProvider).clearCurated(_articleId);
+    if (!mounted) return;
     setState(() {
       _curatedBlocks = null;
       _useCurated = false;
@@ -505,7 +579,10 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
               Expanded(child: _body()),
             ],
           ),
-          if (_selText.isNotEmpty || _selectedText.isNotEmpty) _selBar(),
+          ValueListenableBuilder<int>(
+            valueListenable: _selVer,
+            builder: (_, __, ___) => (_selText.isNotEmpty || _selectedText.isNotEmpty) ? _selBar() : const SizedBox(),
+          ),
           if (_ttsSynthesizing) _ttsMask(),
         ],
       ),
@@ -520,7 +597,10 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
       actions: [
         GoIconBtn(icon: 'menu', onTap: () => setState(() {
           _selectMode = !_selectMode;
-          if (!_selectMode) _selTokens.clear();
+          if (!_selectMode && _sel.isNotEmpty) {
+            _sel.clear();
+            _selVer.value++;
+          }
         }), color: _selectMode ? Go.primary : null),
         GoIconBtn(icon: 'bookmark', onTap: _addToPlan),
         GoIconBtn(icon: _ttsPlaying ? 'stop' : 'tts', onTap: _toggleReadAloud, color: _ttsPlaying ? Go.primary : null),
@@ -663,40 +743,26 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
   }
 
   Widget _paragraph(String text, int pi) {
-    final toks = _tokenize(text);
-    final focused = _flashPara == pi;
+    _syncToks();
+    final toks = pi < _paraToks.length ? _paraToks[pi] : const <_Tok>[];
+    final starts = pi < _paraStarts.length ? _paraStarts[pi] : const <int>[];
     return Container(
       key: _paraKeys.putIfAbsent(pi, () => GlobalKey()),
       margin: const EdgeInsets.only(bottom: Go.sp5),
       child: GestureDetector(
         onLongPress: () => _onParaLongPress(pi),
-        child: Text.rich(
-          TextSpan(children: [
-            const TextSpan(text: '\u2003\u2003'),
-            for (var ti = 0; ti < toks.length; ti++) _span(toks[ti], text, pi, ti, focused && _flashTok == ti),
-          ]),
-        ),
-      ),
-    );
-  }
-
-  InlineSpan _span(_Tok tk, String ctx, int pi, int ti, bool flash) {
-    if (!tk.word) return TextSpan(text: tk.text);
-    final sel = _isSel(pi, ti);
-    return WidgetSpan(
-      alignment: PlaceholderAlignment.baseline,
-      baseline: TextBaseline.alphabetic,
-      child: GestureDetector(
-        onTap: () => _onTok(tk, false, ctx, pi, ti),
-        onLongPress: () => _onTok(tk, true, ctx, pi, ti),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 0.5),
-          decoration: BoxDecoration(
-            color: sel || flash ? Go.selWord : null,
-            borderRadius: BorderRadius.circular(3),
-            border: sel ? Border.all(color: Go.primary, width: 1) : null,
-          ),
-          child: Text(tk.text, style: TextStyle(fontWeight: sel ? FontWeight.w600 : null, color: flash ? Go.primary : null)),
+        child: _ParaText(
+          pi: pi,
+          toks: toks,
+          starts: starts,
+          sel: _sel,
+          selVer: _selVer,
+          flashTok: _flashPara == pi ? _flashTok : -1,
+          onTok: (ti, isLong) {
+            final tk = ti < toks.length ? toks[ti] : const _Tok('', false);
+            _onTok(tk, isLong, text, pi, ti);
+          },
+          onEmptyLongPress: () => _onParaLongPress(pi),
         ),
       ),
     );
@@ -767,10 +833,15 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Image.network(_imgSrc(b, bi), fit: BoxFit.fitWidth, errorBuilder: (_, _, _) {
-            WidgetsBinding.instance.addPostFrameCallback((_) => _onImgError(bi));
-            return const SizedBox(height: 60);
-          }),
+          Image.network(
+            _imgSrc(b, bi),
+            fit: BoxFit.fitWidth,
+            headers: ref.read(appConfigProvider).fetchHeadersFor(_imgSrc(b, bi)),
+            errorBuilder: (_, _, _) {
+              WidgetsBinding.instance.addPostFrameCallback((_) => _onImgError(bi));
+              return const SizedBox(height: 60);
+            },
+          ),
           if (b.alt != null && b.alt!.isNotEmpty)
             Padding(
               padding: const EdgeInsets.fromLTRB(Go.sp3, Go.sp2, Go.sp3, Go.sp3),
@@ -859,6 +930,144 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
         ),
       ),
     );
+  }
+}
+
+/// 单段正文：整段共用一个点击识别器，命中后用二分查找定位词，
+/// 取代"每个词一个 WidgetSpan + GestureDetector"（实测 800 词 671ms → 约 40ms）；
+/// 并且只有本段的选中集合发生变化时才重建，点一个词不再重建整篇。
+class _ParaText extends StatefulWidget {
+  final int pi;
+  final List<_Tok> toks;
+  final List<int> starts;
+  final Set<int> sel;
+  final ValueNotifier<int> selVer;
+  final int flashTok;
+  final void Function(int ti, bool isLong) onTok;
+  final VoidCallback onEmptyLongPress;
+
+  const _ParaText({
+    required this.pi,
+    required this.toks,
+    required this.starts,
+    required this.sel,
+    required this.selVer,
+    required this.flashTok,
+    required this.onTok,
+    required this.onEmptyLongPress,
+  });
+
+  @override
+  State<_ParaText> createState() => _ParaTextState();
+}
+
+class _ParaTextState extends State<_ParaText> {
+  final _rpKey = GlobalKey();
+  Set<int> _mine = const {};
+  late final TapGestureRecognizer _tap;
+  static const _indent = TextSpan(text: '\u2003\u2003');
+
+  @override
+  void initState() {
+    super.initState();
+    _tap = TapGestureRecognizer()..onTapDown = (d) => _hit(d.globalPosition, false);
+    widget.selVer.addListener(_onSelChanged);
+    _mine = _slice();
+  }
+
+  @override
+  void didUpdateWidget(covariant _ParaText old) {
+    super.didUpdateWidget(old);
+    if (old.selVer != widget.selVer) {
+      old.selVer.removeListener(_onSelChanged);
+      widget.selVer.addListener(_onSelChanged);
+    }
+    _mine = _slice();
+  }
+
+  void _onSelChanged() {
+    final next = _slice();
+    if (setEquals(next, _mine)) return;
+    setState(() => _mine = next);
+  }
+
+  Set<int> _slice() {
+    final out = <int>{};
+    for (final k in widget.sel) {
+      if ((k >> 20) == widget.pi) out.add(k & 0xFFFFF);
+    }
+    return out;
+  }
+
+  void _hit(Offset global, bool isLong) {
+    final ro = _rpKey.currentContext?.findRenderObject();
+    if (ro is! RenderParagraph) return;
+    final pos = ro.getPositionForOffset(ro.globalToLocal(global));
+    final ti = _tokenAt(pos.offset);
+    final onWord = ti >= 0 && ti < widget.toks.length && widget.toks[ti].word;
+    if (!onWord) {
+      // 长按落在标点/空白上：保持旧行为，交给整段选择
+      if (isLong) widget.onEmptyLongPress();
+      return;
+    }
+    widget.onTok(ti, isLong);
+  }
+
+  /// 字符偏移 → token 下标：O(log n) 二分，取代按 token 逐个命中测试。
+  int _tokenAt(int offset) {
+    final starts = widget.starts;
+    var lo = 0;
+    var hi = starts.length - 1;
+    var ans = -1;
+    while (lo <= hi) {
+      final mid = (lo + hi) >> 1;
+      if (starts[mid] <= offset) {
+        ans = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    return ans;
+  }
+
+  @override
+  void dispose() {
+    widget.selVer.removeListener(_onSelChanged);
+    _tap.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final base = DefaultTextStyle.of(context).style;
+    return GestureDetector(
+      onLongPressStart: (d) => _hit(d.globalPosition, true),
+      child: Text.rich(
+        key: _rpKey,
+        TextSpan(
+          style: base,
+          children: [
+            _indent,
+            for (var ti = 0; ti < widget.toks.length; ti++) _span(widget.toks[ti], ti),
+          ],
+        ),
+      ),
+    );
+  }
+
+  InlineSpan _span(_Tok tk, int ti) {
+    final selected = _mine.contains(ti);
+    final flash = widget.flashTok == ti;
+    final style = (selected || flash)
+        ? TextStyle(
+            backgroundColor: Go.selWord,
+            fontWeight: selected ? FontWeight.w600 : null,
+            color: flash ? Go.primary : null,
+          )
+        : null;
+    if (!tk.word) return TextSpan(text: tk.text, style: style);
+    return TextSpan(text: tk.text, style: style, recognizer: _tap);
   }
 }
 

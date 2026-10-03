@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:global_overview/app_info.dart';
@@ -182,6 +184,46 @@ class _MineScreenState extends ConsumerState<MineScreen> {
                       ],
                     ),
 
+                    // —— 抓取设置 ——
+                    GoSection(
+                      title: '抓取设置',
+                      children: [
+                        _hint('仅作用于 RSS 与文章正文抓取，不影响 LLM 与翻译接口'),
+                        GoCard(
+                          padding: EdgeInsets.zero,
+                          child: Column(
+                            children: [
+                              _navRow(
+                                icon: 'settings',
+                                title: 'User-Agent',
+                                sub: cfg.userAgent.trim().isEmpty ? '内置默认（浏览器标识）' : cfg.userAgent.trim(),
+                                onTap: _editFetchUa,
+                              ),
+                              _navRow(
+                                icon: 'plus',
+                                title: '附加请求头',
+                                sub: cfg.extraHeaders.trim().isEmpty ? '未设置' : cfg.extraHeaders.trim(),
+                                onTap: _editFetchHeaders,
+                                divider: false,
+                              ),
+                            ],
+                          ),
+                        ),
+                        Padding(
+                          padding: const EdgeInsets.only(top: Go.sp4),
+                          child: GoBtn(
+                            label: '恢复默认请求头',
+                            kind: GoBtnKind.tonal,
+                            block: true,
+                            onTap: () async {
+                              await ref.read(appConfigProvider).setFetchOptions(userAgent: '', extraHeaders: '');
+                              if (mounted) setState(() {});
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+
                     // —— 难度设置 ——
                     GoSection(
                       title: '难度设置',
@@ -345,6 +387,55 @@ class _MineScreenState extends ConsumerState<MineScreen> {
           ),
         ),
       ],
+    );
+  }
+
+  Future<void> _editFetchUa() async {
+    final cfg = ref.read(appConfigProvider);
+    final v = await _prompt('User-Agent', '留空则使用内置默认值', cfg.userAgent);
+    if (v == null) return;
+    await cfg.setFetchOptions(userAgent: v.trim());
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _editFetchHeaders() async {
+    final cfg = ref.read(appConfigProvider);
+    final v = await _prompt('附加请求头（JSON）', '如 {"Referer":"{url}"}，支持 {url} 与 {host}', cfg.extraHeaders, maxLines: 5);
+    if (v == null) return;
+    final raw = v.trim();
+    if (raw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(raw);
+        if (decoded is! Map) throw const FormatException();
+      } catch (_) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('需要是一个 JSON 对象')));
+        return;
+      }
+    }
+    await cfg.setFetchOptions(extraHeaders: raw);
+    if (mounted) setState(() {});
+  }
+
+  Future<String?> _prompt(String title, String hint, String initial, {int maxLines = 1}) {
+    final ctrl = TextEditingController(text: initial);
+    return showDialog<String>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: Text(title),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(hint, style: const TextStyle(fontSize: Go.fsCap, color: Go.onSurface3)),
+            const SizedBox(height: Go.sp3),
+            GoField(controller: ctrl, maxLines: maxLines),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c), child: const Text('取消')),
+          TextButton(onPressed: () => Navigator.pop(c, ctrl.text), child: const Text('保存')),
+        ],
+      ),
     );
   }
 

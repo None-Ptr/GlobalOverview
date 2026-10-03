@@ -4,6 +4,7 @@ import 'package:global_overview/models/models.dart';
 import 'package:global_overview/providers/providers.dart';
 import 'package:global_overview/screens/article_screen.dart';
 import 'package:global_overview/services/feeds_data.dart';
+import 'package:global_overview/services/app_exception.dart';
 import 'package:global_overview/theme/go_tokens.dart';
 import 'package:global_overview/widgets/go_icon.dart';
 import 'package:global_overview/widgets/go_ui.dart';
@@ -29,7 +30,8 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
   Map<String, bool> _planning = {};
   int _cap = 80;
   bool _hasMore = false;
-  static const _failThreshold = 3;
+  List<({String title, String? reason})> _failures = const [];
+  static const _refreshBudget = Duration(seconds: 45);
 
   @override
   void initState() {
@@ -155,8 +157,13 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
     _loadAll(false);
   }
 
-  Future<List<({bool ok, int count, int failCount})>> _mapConcurrent<T>(List<T> list, int limit, Future<({bool ok, int count, int failCount})> Function(T) fn) async {
-    final results = List<({bool ok, int count, int failCount})>.filled(list.length, (ok: true, count: 0, failCount: 0));
+  Future<List<({bool ok, int count, int failCount, String? error})>> _mapConcurrent<T>(
+    List<T> list,
+    int limit,
+    Future<({bool ok, int count, int failCount, String? error})> Function(T) fn,
+  ) async {
+    final results = List<({bool ok, int count, int failCount, String? error})>.filled(
+        list.length, (ok: true, count: 0, failCount: 0, error: null));
     var i = 0;
     Future<void> worker() async {
       while (i < list.length) {
@@ -180,15 +187,19 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
       _loading = true;
       _error = '';
     });
-    final results = await _mapConcurrent(_feeds, 4, (f) => svc.fetchFeedInto(f, replaceCache));
-    for (var k = results.length - 1; k >= 0; k--) {
-      final r = results[k];
-      if (!r.ok && r.failCount >= _failThreshold) {
-        await svc.unsubscribe(_feeds[k]);
-      }
+    final deadline = DateTime.now().add(_refreshBudget);
+    final results = await _mapConcurrent(_feeds, 4, (f) => svc.fetchFeedInto(f, replaceCache, deadline: deadline));
+    final failed = <({String title, String? reason})>[];
+    for (var k = 0; k < results.length; k++) {
+      if (!results[k].ok) failed.add((title: _feeds[k].title ?? '未命名源', reason: results[k].error));
     }
     _feeds = await svc.listFeeds();
-    if (mounted) setState(() => _loading = false);
+    if (mounted) {
+      setState(() {
+        _loading = false;
+        _failures = failed;
+      });
+    }
     await _loadAll(true);
   }
 
@@ -203,48 +214,101 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
     }
   }
 
+  void _showFailure(String title, Object e, {VoidCallback? onRetry}) {
+    if (!mounted) return;
+    final detail = errDetail(e);
+    showDialog(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: Text(title),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(errText(e), style: const TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface, height: 1.5)),
+            if (detail.isNotEmpty) ...[
+              const SizedBox(height: Go.sp3),
+              Text(detail, style: const TextStyle(fontSize: Go.fsCap, color: Go.onSurface3)),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c), child: const Text('关闭')),
+          if (onRetry != null)
+            TextButton(
+              onPressed: () {
+                Navigator.pop(c);
+                onRetry();
+              },
+              child: const Text('重试'),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Future<bool> _askRecapture() async {
+    final r = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('这篇文章可能是空的'),
+        content: const Text('它是在抓取校验加入之前保存的，可能来自一次失败的请求。要重新抓取吗？'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('仍然打开')),
+          TextButton(onPressed: () => Navigator.pop(c, true), child: const Text('重新抓取')),
+        ],
+      ),
+    );
+    return r == true;
+  }
+
   Future<void> _addToPlan(Map<String, dynamic> it) async {
     final guid = it['guid'] as String;
     final svc = ref.read(feedsProvider);
     if (_planning[guid] == true) {
       final aid = await svc.articleIdByGuid(guid);
       if (aid != null) await svc.removePlan(aid);
+      if (!mounted) return;
       setState(() => _planning = {..._planning, guid: false});
       ref.read(planRevisionProvider.notifier).bump();
       return;
     }
     setState(() => _fetching = true);
     try {
-      final aid = await svc.captureArticle(guid, it['link'] as String? ?? '', it['title'] as String? ?? '');
-      await svc.addPlan(aid);
+      final r = await svc.captureArticle(guid, it['link'] as String? ?? '', it['title'] as String? ?? '');
+      await svc.addPlan(r.id);
+      if (!mounted) return;
       setState(() => _planning = {..._planning, guid: true});
       ref.read(planRevisionProvider.notifier).bump();
     } catch (e) {
-      if (mounted) {
-        showDialog(
-          context: context,
-          builder: (c) => AlertDialog(title: const Text('加入失败'), content: Text('$e'), actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('确定'))]),
-        );
-      }
+      _showFailure('加入失败', e, onRetry: () => _addToPlan(it));
     } finally {
       if (mounted) setState(() => _fetching = false);
     }
   }
 
   Future<void> _openItem(Map<String, dynamic> it) async {
+    final svc = ref.read(feedsProvider);
+    final guid = it['guid'] as String;
+    final link = it['link'] as String? ?? '';
+    final title = it['title'] as String? ?? '';
     setState(() => _fetching = true);
     try {
-      final id = await ref.read(feedsProvider).captureArticle(it['guid'] as String, it['link'] as String? ?? '', it['title'] as String? ?? '');
+      var r = await svc.captureArticle(guid, link, title);
+      if (!r.fresh && await svc.looksUnusable(r.id)) {
+        setState(() => _fetching = false);
+        if (await _askRecapture() && mounted) {
+          setState(() => _fetching = true);
+          r = await svc.captureArticle(guid, link, title, force: true);
+        }
+      }
       if (!mounted) return;
       setState(() => _fetching = false);
-      Navigator.push(context, MaterialPageRoute(builder: (_) => ArticleScreen(articleId: id)));
+      Navigator.push(context, MaterialPageRoute(builder: (_) => ArticleScreen(articleId: r.id)));
     } catch (e) {
       if (!mounted) return;
       setState(() => _fetching = false);
-      showDialog(
-        context: context,
-        builder: (c) => AlertDialog(title: const Text('抓取失败'), content: Text('$e'), actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('确定'))]),
-      );
+      _showFailure('抓取失败', e, onRetry: () => _openItem(it));
     }
   }
 
@@ -311,6 +375,7 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
               ),
               _catRail(),
               if (_feedsInCat.isNotEmpty) _feedRail(),
+              if (_failures.isNotEmpty) _failBanner(),
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: () => _refreshAll(true),
@@ -337,6 +402,45 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
                 ),
               ),
             ),
+        ],
+      ),
+    );
+  }
+
+  Widget _failBanner() {
+    final shown = _failures.take(3).toList();
+    return Container(
+      margin: const EdgeInsets.fromLTRB(Go.sp4, 0, Go.sp4, Go.sp2),
+      padding: const EdgeInsets.fromLTRB(Go.sp4, Go.sp3, Go.sp2, Go.sp3),
+      decoration: BoxDecoration(
+        color: Go.warning.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(Go.rMd),
+        border: Border.all(color: Go.warning.withValues(alpha: 0.32), width: 0.5),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const GoIcon('alert', size: 15, color: Go.onWarning),
+          const SizedBox(width: Go.sp3),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '${_failures.length} 个源更新失败',
+                  style: const TextStyle(fontSize: Go.fsMeta, fontWeight: FontWeight.w600, color: Go.onWarning),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  shown.map((f) => '${f.title}（${f.reason ?? '未知原因'}）').join('、') +
+                      (_failures.length > 3 ? ' 等 ${_failures.length} 个' : ''),
+                  style: const TextStyle(fontSize: Go.fsCap, color: Go.onSurface2, height: 1.5),
+                ),
+              ],
+            ),
+          ),
+          GoBtn(label: '重试', kind: GoBtnKind.tonal, onTap: _onRefreshTap),
+          GoIconBtn(icon: 'close', onTap: () => setState(() => _failures = const [])),
         ],
       ),
     );

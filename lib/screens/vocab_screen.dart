@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:global_overview/providers/providers.dart';
+import 'package:global_overview/services/app_exception.dart';
 import 'package:global_overview/screens/article_screen.dart';
 import 'package:global_overview/screens/review_screen.dart';
 import 'package:global_overview/theme/go_tokens.dart';
@@ -74,11 +75,12 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
     setState(() => _busy = true);
     try {
       final res = await ref.read(vocabProvider).organize();
+      if (!mounted) return;
       setState(() => _org = res);
       await _load();
     } catch (e) {
       if (!mounted) return;
-      final msg = '$e';
+      final msg = errText(e);
       if (msg.contains('未配置') || msg.contains('profile')) {
         final ok = await showDialog<bool>(
           context: context,
@@ -99,6 +101,7 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
 
   Future<void> _openOcc(Map<String, dynamic> h) async {
     final list = await ref.read(vocabProvider).getOccurrence(h['head'] as String);
+    if (!mounted) return;
     setState(() => _occ = {'head': h['head'], 'zh': h['zh'] ?? '', 'list': list});
   }
 
@@ -119,10 +122,11 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
     setState(() => s['_analyzing'] = true);
     try {
       final data = await ref.read(vocabProvider).analyzeSentence(s['sentence'] as String);
+      if (!mounted) return;
       setState(() => s['_analysis'] = data);
     } catch (e) {
       if (!mounted) return;
-      final msg = '$e';
+      final msg = errText(e);
       if (msg.contains('未配置')) {
         final ok = await showDialog<bool>(
           context: context,

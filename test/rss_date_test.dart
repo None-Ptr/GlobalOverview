@@ -6,7 +6,7 @@ class _FakeHttp extends HttpService {
   final String body;
   _FakeHttp(this.body);
   @override
-  Future<String> getText(String url, {Map<String, String>? headers}) async => body;
+  Future<String> getText(String url, {Map<String, String>? headers, bool fetchScope = true, RetryPolicy retry = RetryPolicy.none}) async => body;
 }
 
 const _rss = '''<?xml version="1.0" encoding="UTF-8"?>

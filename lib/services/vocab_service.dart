@@ -66,27 +66,42 @@ class VocabService {
     }
   }
 
+  /// 批量读取 word_cache / 其它大字段时的单批上限（规避 Android CursorWindow）。
+  static const _chunk = 100;
+
   /// 词汇列表（附带 sourceCount / latestSentence / zh）。
   Future<List<Map<String, dynamic>>> getHeads() async {
     final list = (await _db.select('SELECT head, kind, firstSeen, lastSeen, occCount, family, fsrs_state, fsrs_due FROM vocab_head ORDER BY lastSeen DESC'))
         .map((e) => Map<String, dynamic>.of(e))
         .toList();
-    final allOcc = await _db.select('SELECT articleGuid, articleTitle, sourceLabel, sentence, lemma FROM vocab_occ ORDER BY at DESC');
-    final occByHead = <String, List<Map<String, dynamic>>>{};
-    for (final o in allOcc) {
-      (occByHead['${o['lemma']}'] ??= []).add(o);
-    }
-    final wc = await _db.select('SELECT word, lemma, result FROM word_cache');
+    // vocab_occ 会随阅读持续增长，整表拉取会逼近 CursorWindow；这里只要两个聚合量，
+    // 结果行数由「词条数」决定而不是「出现次数」。
+    // 注：SQLite 在聚合查询里对裸列（sentence）的取值来自 max(at) 命中的那一行，这是
+    // SQLite 的既定行为（本 App 只跑 Android/sqflite）。
+    final cntRows = await _db.select('SELECT lemma, COUNT(DISTINCT articleGuid) AS c FROM vocab_occ GROUP BY lemma');
+    final sourceCount = <String, int>{for (final r in cntRows) '${r['lemma']}': (r['c'] as int?) ?? 0};
+    final lastRows = await _db.select('SELECT lemma, MAX(at) AS m, sentence FROM vocab_occ GROUP BY lemma');
+    final latestSentence = <String, String>{for (final r in lastRows) '${r['lemma']}': (r['sentence'] as String?) ?? ''};
+    // result 是整段 JSON，一次全表取会逼近 Android CursorWindow 上限，按 100 条分批。
+    final heads = list.map((h) => '${h['head']}').toList();
     final wcMap = <String, Map<String, dynamic>>{};
-    for (final w in wc) {
-      final k = (w['lemma'] as String?)?.isNotEmpty == true ? w['lemma'] as String : '${w['word']}';
-      wcMap[k] ??= w;
+    for (var i = 0; i < heads.length; i += _chunk) {
+      final chunk = heads.skip(i).take(_chunk).toList();
+      final ph = chunk.map((_) => '?').join(',');
+      final rows = await _db.select(
+        'SELECT word, lemma, result FROM word_cache WHERE word IN ($ph) OR lemma IN ($ph)',
+        [...chunk, ...chunk],
+      );
+      for (final w in rows) {
+        final k = (w['lemma'] as String?)?.isNotEmpty == true ? w['lemma'] as String : '${w['word']}';
+        wcMap[k] ??= w;
+      }
     }
     for (final h in list) {
-      final occs = occByHead['${h['head']}'] ?? [];
-      h['sourceCount'] = occs.map((o) => '${o['articleGuid']}').toSet().length;
-      h['latestSentence'] = occs.isNotEmpty ? (occs.first['sentence'] ?? '') : '';
-      final hit = wcMap['${h['head']}'];
+      final head = '${h['head']}';
+      h['sourceCount'] = sourceCount[head] ?? 0;
+      h['latestSentence'] = latestSentence[head] ?? '';
+      final hit = wcMap[head];
       if (hit != null && hit['result'] != null) {
         try {
           final r = jsonDecode(hit['result'] as String);
@@ -190,7 +205,13 @@ class VocabService {
 
   /// AI 整理：把查询过的生词按主题聚类分组。
   Future<Map<String, dynamic>> organize() async {
-    final wc = await _db.select('SELECT word, mode, result FROM word_cache LIMIT 500');
+    final wc = <Map<String, dynamic>>[];
+    for (var offset = 0; offset < 500; offset += _chunk) {
+      final rows = await _db.select('SELECT word, mode, result FROM word_cache LIMIT $_chunk OFFSET $offset');
+      if (rows.isEmpty) break;
+      wc.addAll(rows);
+      if (rows.length < _chunk) break;
+    }
     final list = wc.map((w) {
       var hint = '';
       try {

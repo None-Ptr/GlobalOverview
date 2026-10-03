@@ -90,6 +90,8 @@
 
   - 内置 **86 个 `RSS` 源 / 17 个分类**（新闻、科学、健康、科技、商业、环境、食物、艺术、设计、书籍文学、思想文化、英语学习、体育、旅行、教育、政策智库、生活），首次启动默认订阅 14 个。
   - 下拉刷新、分类导航、按源筛选、加载更多；支持手动添加自建源。
+  - 抓取保护：内置浏览器式 `User-Agent`，可在「我的 → 抓取设置」里覆盖 `UA` 并附加自定义请求头（支持 `{url}` / `{host}` 占位符）。
+  - 失败可恢复：`403` / `429` / 超时等会被识别并给出可重试的提示；正文为空、付费墙或 Cloudflare 拦截页**一律不入库**（不会把一次失败永久缓存成空白文章），批量刷新失败会在顶部列出失败的源。
 
 - **沉浸式阅读器**
 
@@ -143,12 +145,13 @@
 - `Flutter 3.47` / `Dart 3.13`
 - `Riverpod 3`（Provider + Notifier 变更信号）
 - `sqflite`（本地数据）
-- `http`
+- `http`（网络层，可注入 `Client`，测试用官方 `MockClient`）
 - `xml`（`RSS` 解析）
 - `html`（正文抽取）
 - `printing` + `pdf`（导出）
 - `flutter_tts`（朗读）
-- `shared_preferences`（配置与密钥）
+- `shared_preferences`（普通配置）
+- `flutter_secure_storage`（`api key` 等敏感项存 Android Keystore，不参与云备份）
 - `crypto` + `uuid`
 - `flutter_lints` + `flutter_test`
 
@@ -169,7 +172,7 @@ lib/
   screens/                   12 个页面
   theme/                     设计 token（Go.*）与深浅主题
   widgets/                   通用组件（GoCard / GoBtn / GoEmpty / GoPage…）、图标、底部导航、地球背景
-test/                        12 个测试文件（widget 测试 + 单元测试，共 17 个用例）
+test/                        17 个测试文件（widget 测试 + 单元测试，共 50 个用例）
 legacy/                      旧版 uni-app + Vue3 源码（v2.x，仅作历史留档）
 assets/                      应用图标与世界地图 GeoJSON
 docs/screenshots/            README 界面预览截图

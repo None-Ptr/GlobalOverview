@@ -180,7 +180,8 @@ class HabitService {
   Future<void> setGoal(int n) => _set(_goalKey, (n > 0 ? n : 1).toString());
 
   /// 交卷一次调用；correct / done 为本次已判分的正确题数 / 总题数（pending 不计入）。
-  Future<({int todayCount, int streak, int maxStreak, int total})> recordCompletion({int correct = 0, int done = 0}) async {
+  Future<({int todayCount, int streak, int maxStreak, int total, List<HabitBadge> newBadges})>
+      recordCompletion({int correct = 0, int done = 0}) async {
     final days = await _getDays();
     final today = ymd(DateTime.now());
     final prevCount = days[today] ?? 0;
@@ -212,9 +213,29 @@ class HabitService {
     await _set(_maxKey, maxStreak.toString());
 
     final ctx = await _buildCtx(total, maxStreak, correctSum, totalQ, perfect, over);
-    await _evaluateUnlocks(ctx, await _getUnlocked());
+    final unlocked = await _evaluateUnlocks(ctx, await _getUnlocked());
 
-    return (todayCount: newCount, streak: streak, maxStreak: maxStreak, total: total);
+    return (
+      todayCount: newCount,
+      streak: streak,
+      maxStreak: maxStreak,
+      total: total,
+      newBadges: [
+        for (final b in unlocked.fresh)
+          HabitBadge(
+            id: b.id,
+            cat: b.cat,
+            label: b.label,
+            req: b.req,
+            reqQ: b.reqQ,
+            icon: b.icon,
+            tier: b.tier,
+            unlocked: true,
+            progress: 1.0,
+            hint: '已解锁',
+          ),
+      ],
+    );
   }
 
   Future<Map<String, dynamic>> _buildCtx(int total, int maxStreak, int correct, int totalQ, int perfect, int over) async {
@@ -270,17 +291,21 @@ class HabitService {
     }
   }
 
-  Future<Set<String>> _evaluateUnlocks(Map<String, dynamic> ctx, Set<String> prev) async {
+  /// 评估并持久化解锁，返回 (全量已解锁, 本次新解锁)。
+  Future<({Set<String> next, List<_BadgeDef> fresh})> _evaluateUnlocks(
+    Map<String, dynamic> ctx,
+    Set<String> prev,
+  ) async {
     final next = {...prev};
-    var changed = false;
+    final fresh = <_BadgeDef>[];
     for (final b in badgeDefs) {
       if (!next.contains(b.id) && _isUnlocked(b, ctx)) {
         next.add(b.id);
-        changed = true;
+        fresh.add(b);
       }
     }
-    if (changed) await _set(_badgesKey, jsonEncode(next.toList()));
-    return next;
+    if (fresh.isNotEmpty) await _set(_badgesKey, jsonEncode(next.toList()));
+    return (next: next, fresh: fresh);
   }
 
   /// 读取首页所需的全部展示数据。

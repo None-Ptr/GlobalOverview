@@ -17,7 +17,6 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
   int _idx = 0;
   bool _revealed = false;
   Map<String, dynamic>? _card;
-  Map<String, Map<String, dynamic>> _wcMap = {};
 
   @override
   void initState() {
@@ -30,12 +29,6 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     await svc.syncHeadsFromCache();
     _cards = await svc.getDueCards(50);
     _idx = 0;
-    final wc = await ref.read(dbProvider).select('SELECT word, lemma, result FROM word_cache LIMIT 1000');
-    _wcMap = {};
-    for (final w in wc) {
-      final k = (w['lemma'] as String?)?.isNotEmpty == true ? w['lemma'] as String : '${w['word']}';
-      _wcMap.putIfAbsent(k, () => w);
-    }
     await _showCurrent();
   }
 
@@ -46,8 +39,13 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
       return;
     }
     final c = _cards[_idx];
-    final hit = _wcMap['${c['head']}'];
+    final head = '${c['head']}';
+    // 只查当前词：一次拉 1000 条 result 会逼近 Android CursorWindow 上限。
+    final rows = await ref
+        .read(dbProvider)
+        .select('SELECT result FROM word_cache WHERE word = ? OR lemma = ? LIMIT 1', [head, head]);
     var zh = '';
+    final hit = rows.isEmpty ? null : rows.first;
     if (hit != null && hit['result'] != null) {
       try {
         final r = jsonDecode(hit['result'] as String);

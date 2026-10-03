@@ -1,6 +1,9 @@
-import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class LlmProfile {
   final String id;
@@ -49,6 +52,7 @@ class AppConfigService extends ChangeNotifier {
   );
 
   SharedPreferences? _prefs;
+  bool _secureOk = !Platform.environment.containsKey('FLUTTER_TEST');
   List<LlmProfile> _profiles = [];
   String _currentProfileId = _builtinFree.id;
   TranslateConfig _translate = TranslateConfig();
@@ -58,6 +62,25 @@ class AppConfigService extends ChangeNotifier {
   double _fontSize = 18;
   double _lineHeight = 1.8;
   String _transEngine = 'auto';
+  String _userAgent = '';
+  String _extraHeaders = '';
+
+  static const defaultUserAgent =
+      'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
+
+  static const _kProfiles = 'llm_profiles';
+  static const _kCurrent = 'llm_current';
+  static const _kTranslate = 'translate';
+  static const _kTranslators = 'custom_translators';
+  static const _kUa = 'fetch_user_agent';
+  static const _kExtraHeaders = 'fetch_extra_headers';
+
+  static const _sProfiles = 'llm_profiles_v2';
+  static const _sTranslate = 'translate_v2';
+  static const _sTranslators = 'custom_translators_v2';
+  static const _sExtraHeaders = 'fetch_extra_headers_v2';
+
+  static const _secure = FlutterSecureStorage(aOptions: AndroidOptions());
 
   List<LlmProfile> get profiles => _profiles;
   String get currentProfileId => _currentProfileId;
@@ -71,10 +94,56 @@ class AppConfigService extends ChangeNotifier {
 
   List<CustomTranslator> _translators = [];
   List<CustomTranslator> get translators => _translators;
+  String get userAgent => _userAgent;
+  String get extraHeaders => _extraHeaders;
+  String get effectiveUserAgent => _userAgent.trim().isEmpty ? defaultUserAgent : _userAgent.trim();
+
+  /// 抓取链路（RSS 列表 / 文章正文 / 图片）用的请求头；LLM 与翻译接口不经过这里。
+  Map<String, String> fetchHeadersFor(String url) {
+    final out = <String, String>{
+      'User-Agent': effectiveUserAgent,
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      'Accept-Language': 'en-US,en;q=0.9',
+    };
+    final raw = _extraHeaders.trim();
+    if (raw.isNotEmpty) {
+      try {
+        final decoded = jsonDecode(_fill(raw, url));
+        if (decoded is Map) {
+          decoded.forEach((k, v) {
+            final key = '$k'.trim();
+            if (key.isNotEmpty) out[key] = '$v';
+          });
+        }
+      } catch (_) {}
+    }
+    return out;
+  }
+
+  static String _fill(String tpl, String url) {
+    final host = Uri.tryParse(url)?.host ?? '';
+    return tpl.replaceAll('{url}', url).replaceAll('{host}', host);
+  }
+
+  Future<void> setFetchOptions({String? userAgent, String? extraHeaders}) async {
+    if (userAgent != null) {
+      _userAgent = userAgent;
+      await _prefs?.setString(_kUa, userAgent);
+    }
+    if (extraHeaders != null) {
+      _extraHeaders = extraHeaders;
+      await _writeSecret(_sExtraHeaders, _kExtraHeaders, extraHeaders);
+    }
+    notifyListeners();
+  }
 
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
-    final rawProfiles = _prefs!.getString('llm_profiles');
+    await _migrate(_sProfiles, _kProfiles);
+    await _migrate(_sTranslate, _kTranslate);
+    await _migrate(_sTranslators, _kTranslators);
+    await _migrate(_sExtraHeaders, _kExtraHeaders);
+    final rawProfiles = await _readSecret(_sProfiles, _kProfiles);
     if (rawProfiles != null) {
       try {
         final list = (jsonDecode(rawProfiles) as List).map((e) => LlmProfile.fromJson(e)).toList();
@@ -85,16 +154,23 @@ class AppConfigService extends ChangeNotifier {
     } else {
       _profiles = [_builtinFree];
     }
-    if (_prefs!.getString('llm_current') != null) _currentProfileId = _prefs!.getString('llm_current')!;
+    final rawCurrent = _prefs!.getString(_kCurrent);
+    if (rawCurrent != null) _currentProfileId = rawCurrent;
     if (!_profiles.any((p) => p.id == _currentProfileId)) _currentProfileId = _profiles.first.id;
-    final rawT = _prefs!.getString('translate');
-    if (rawT != null) _translate = TranslateConfig.fromJson(jsonDecode(rawT));
+    final rawT = await _readSecret(_sTranslate, _kTranslate);
+    if (rawT != null) {
+      try {
+        _translate = TranslateConfig.fromJson(jsonDecode(rawT));
+      } catch (_) {}
+    }
     _darkMode = _prefs!.getBool('dark_mode') ?? true;
     _dailyGoal = _prefs!.getInt('daily_goal') ?? 0;
     _fontSize = _prefs!.getDouble('reader_fontSize') ?? 18;
     _lineHeight = _prefs!.getDouble('reader_lineHeight') ?? 1.8;
     _transEngine = _prefs!.getString('reader_transEngine') ?? 'auto';
-    final rawTr = _prefs!.getString('custom_translators');
+    _userAgent = _prefs!.getString(_kUa) ?? '';
+    _extraHeaders = await _readSecret(_sExtraHeaders, _kExtraHeaders) ?? '';
+    final rawTr = await _readSecret(_sTranslators, _kTranslators);
     if (rawTr != null) {
       try {
         _translators = (jsonDecode(rawTr) as List).map((e) => CustomTranslator.fromJson(Map<String, dynamic>.from(e))).toList();
@@ -104,7 +180,49 @@ class AppConfigService extends ChangeNotifier {
     }
   }
 
-  Future<void> _saveProfiles() => _prefs!.setString('llm_profiles', jsonEncode(_profiles.map((e) => e.toJson()).toList()));
+  Future<void> _saveProfiles() =>
+      _writeSecret(_sProfiles, _kProfiles, jsonEncode(_profiles.map((e) => e.toJson()).toList()));
+
+  Future<String?> _readSecret(String secureKey, String legacyKey) async {
+    if (_secureOk) {
+      try {
+        final v = await _secure.read(key: secureKey);
+        if (v != null) return v;
+      } catch (_) {
+        _secureOk = false;
+      }
+    }
+    return _prefs?.getString(legacyKey);
+  }
+
+  Future<void> _writeSecret(String secureKey, String legacyKey, String value) async {
+    if (_secureOk) {
+      try {
+        await _secure.write(key: secureKey, value: value);
+        await _prefs?.remove(legacyKey);
+        return;
+      } catch (_) {
+        _secureOk = false;
+      }
+    }
+    await _prefs?.setString(legacyKey, value);
+  }
+
+  /// 明文 → Keystore：确认加密写入成功后才删明文，避免密钥丢失。
+  Future<void> _migrate(String secureKey, String legacyKey) async {
+    final legacy = _prefs?.getString(legacyKey);
+    if (legacy == null || !_secureOk) return;
+    try {
+      if (await _secure.read(key: secureKey) != null) {
+        await _prefs?.remove(legacyKey);
+        return;
+      }
+      await _secure.write(key: secureKey, value: legacy);
+      if (await _secure.read(key: secureKey) != null) await _prefs?.remove(legacyKey);
+    } catch (_) {
+      _secureOk = false;
+    }
+  }
   Future<void> setProfiles(List<LlmProfile> list) async {
     _profiles = list.isNotEmpty ? list : [_builtinFree];
     await _saveProfiles();
@@ -112,7 +230,7 @@ class AppConfigService extends ChangeNotifier {
   }
   Future<void> setCurrentProfile(String id) async {
     _currentProfileId = id;
-    await _prefs!.setString('llm_current', id);
+    await _prefs!.setString(_kCurrent, id);
     notifyListeners();
   }
   Future<void> setDarkMode(bool v) async {
@@ -149,13 +267,13 @@ class AppConfigService extends ChangeNotifier {
     } else {
       _translators.add(t);
     }
-    await _prefs!.setString('custom_translators', jsonEncode(_translators.map((e) => e.toJson()).toList()));
+    await _writeSecret(_sTranslators, _kTranslators, jsonEncode(_translators.map((e) => e.toJson()).toList()));
     notifyListeners();
   }
 
   Future<void> deleteTranslator(String id) async {
     _translators.removeWhere((x) => x.id == id);
-    await _prefs!.setString('custom_translators', jsonEncode(_translators.map((e) => e.toJson()).toList()));
+    await _writeSecret(_sTranslators, _kTranslators, jsonEncode(_translators.map((e) => e.toJson()).toList()));
     notifyListeners();
   }
 }

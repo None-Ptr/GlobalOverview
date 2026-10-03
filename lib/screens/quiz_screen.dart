@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:global_overview/providers/providers.dart';
+import 'package:global_overview/services/app_exception.dart';
 import 'package:global_overview/services/quiz_service.dart';
 import 'package:global_overview/screens/article_screen.dart';
 import 'package:global_overview/screens/wrong_screen.dart';
@@ -74,7 +75,7 @@ class _QuizScreenState extends ConsumerState<QuizScreen> {
         }
       } catch (_) {}
     } catch (e) {
-      _error = '$e';
+      _error = errText(e);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -134,7 +135,7 @@ class _QuizScreenState extends ConsumerState<QuizScreen> {
       await ref.read(dbProvider).clearDrafts(_questions.map((q) => q['id'] as int).toList());
       final graded = res.results.where((r) => r['status'] == 'graded').toList();
       final ok = graded.where((r) => r['correct'] == true).length;
-      await ref.read(habitProvider).recordCompletion(correct: ok, done: graded.length);
+      final rec = await ref.read(habitProvider).recordCompletion(correct: ok, done: graded.length);
       ref.read(habitRevisionProvider.notifier).bump();
       if (!mounted) return;
       setState(() => _result = true);
@@ -143,6 +144,10 @@ class _QuizScreenState extends ConsumerState<QuizScreen> {
       var content = '正确 $ok / ${res.results.length}';
       if (res.pending > 0) content += '，${res.pending} 题判分未完成，可单独重判';
       if (wrongCount > 0) content += '，错题已入错题本';
+      // 放进结果对话框而不是 SnackBar：交卷后可能立刻跳到错题本，SnackBar 会被盖掉。
+      if (rec.newBadges.isNotEmpty) {
+        content += '\n\n解锁成就：${rec.newBadges.map((b) => b.label).join('、')}';
+      }
       final viewWrong = await showDialog<bool>(
         context: context,
         builder: (c) => AlertDialog(
@@ -158,14 +163,18 @@ class _QuizScreenState extends ConsumerState<QuizScreen> {
         Navigator.push(context, MaterialPageRoute(builder: (_) => const WrongScreen()));
       }
     } catch (e) {
-      if (mounted) showDialog(context: context, builder: (c) => AlertDialog(title: const Text('判分失败'), content: Text('$e'), actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('确定'))]));
+      if (mounted) {
+        showDialog(context: context, builder: (c) => AlertDialog(title: const Text('判分失败'), content: Text(errText(e)), actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('确定'))]));
+      }
     }
   }
 
   Future<void> _retryGrade(int qid) async {
     final res = await ref.read(gradeProvider).gradeBatch([{'questionId': qid, 'final': _draftOf(qid)}]);
     final r = res.results.isNotEmpty ? res.results.first : null;
-    if (r != null) setState(() => _answered[qid] = {'correct': r['correct'] == true, 'comment': r['comment'], 'status': r['status']});
+    if (r != null && mounted) {
+      setState(() => _answered[qid] = {'correct': r['correct'] == true, 'comment': r['comment'], 'status': r['status']});
+    }
   }
 
   void _openSource() {

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 
 class DbService {
@@ -33,12 +34,26 @@ class DbService {
   Future<Database> _open() async {
     final dir = await getDatabasesPath();
     final path = '$dir/$_dbName';
-    final db = await openDatabase(path, version: 1, onCreate: (db, version) async {
-      for (final stmt in _schema.split(';')) {
+    Future<void> runScript(Database db, String script) async {
+      for (final stmt in script.split(';')) {
         final s = stmt.trim();
         if (s.isNotEmpty) await db.execute(s);
       }
-    });
+    }
+
+    final db = await openDatabase(
+      path,
+      version: _dbVersion,
+      onCreate: (db, version) async {
+        // 全新安装：建表 + 建全部索引（索引不能只放 onUpgrade，否则新安装会完全没有索引）。
+        await runScript(db, _schema);
+        await runScript(db, _indexes);
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        // 老库升级：索引用 CREATE INDEX IF NOT EXISTS，幂等；按当前版本把缺失索引补齐即可。
+        if (oldVersion < _dbVersion) await runScript(db, _indexes);
+      },
+    );
     _db = db;
     return db;
   }
@@ -249,3 +264,33 @@ CREATE TABLE IF NOT EXISTS templates (
   name TEXT UNIQUE, source TEXT
 );
 ''';
+
+/// 追加的索引：只覆盖确实走全表扫描的热路径（执行计划实测：去掉了全表扫描 + 临时 B 树排序）。
+/// - feed_items(feedId, pubDate)：单源阅读视图 `WHERE feedId = ? ORDER BY pubDate DESC`，
+///   原来走 UNIQUE(feedId,guid) 后再内存排序；合到 (feedId,pubDate) 后直接有序返回。
+/// - feed_items.pubDate：聚合阅读列表 `ORDER BY pubDate DESC LIMIT/OFFSET`（JOIN feeds），每次进页都查。
+/// - answers(questionId, gradedAt)：草稿/答题历史按这两列过滤排序。
+/// - answers(gradedAt)：错题本 / 导出页 `ORDER BY gradedAt DESC` 扫整张只增不减的 answers。
+/// - vocab_occ.lemma：词汇页 `GROUP BY lemma` 与 `WHERE lemma = ?`。
+/// - questions.setId：`WHERE setId = ?`。
+/// - vocab_head(lastSeen)：词汇列表 `ORDER BY lastSeen DESC`。
+/// - vocab_head(fsrs_due)：复习页 `WHERE fsrs_due <= ? ORDER BY fsrs_due ASC`（高频打开）。
+/// - word_cache.lemma：`WHERE word = ? OR lemma = ?` 的 OR 优化需要两侧各有索引
+///   （点查 `word+mode` 已由 schema 的 UNIQUE(word,mode) 覆盖，无需额外索引）。
+@visibleForTesting
+const List<String> dbIndexStatements = [
+  'CREATE INDEX IF NOT EXISTS idx_feed_items_feed_pubdate ON feed_items(feedId, pubDate)',
+  'CREATE INDEX IF NOT EXISTS idx_feed_items_pubdate ON feed_items(pubDate)',
+  'CREATE INDEX IF NOT EXISTS idx_answers_question ON answers(questionId, gradedAt)',
+  'CREATE INDEX IF NOT EXISTS idx_answers_gradedat ON answers(gradedAt)',
+  'CREATE INDEX IF NOT EXISTS idx_vocab_occ_lemma ON vocab_occ(lemma)',
+  'CREATE INDEX IF NOT EXISTS idx_questions_set ON questions(setId)',
+  'CREATE INDEX IF NOT EXISTS idx_vocab_head_lastseen ON vocab_head(lastSeen)',
+  'CREATE INDEX IF NOT EXISTS idx_vocab_head_fsrsdue ON vocab_head(fsrs_due)',
+  'CREATE INDEX IF NOT EXISTS idx_word_cache_lemma ON word_cache(lemma)',
+];
+
+final String _indexes = '${dbIndexStatements.join(';\n')};';
+
+/// 当前数据库版本；每次改 [schema]/[_indexes] 后 +1 并在 [onUpgrade] 里补迁移。
+const int _dbVersion = 3;

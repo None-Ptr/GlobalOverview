@@ -69,6 +69,8 @@ IconData goIcon(String name) {
       return Icons.stop_circle_outlined;
     case 'chevron-right':
       return Icons.chevron_right;
+    case 'close':
+      return Icons.close;
     default:
       return Icons.help_outline;
   }

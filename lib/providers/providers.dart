@@ -18,7 +18,9 @@ import 'package:global_overview/services/curate_service.dart';
 import 'package:global_overview/services/word_service.dart';
 
 final dbProvider = Provider((ref) => DbService());
-final httpProvider = Provider((ref) => HttpService());
+/// 这里用 read 而不是 watch：配置变更时不需要重建（HttpService 每次请求时才读配置），
+/// 否则每次 notify 都会连带重建整条服务链并泄漏一个未 close 的 http.Client。
+final httpProvider = Provider((ref) => HttpService(config: ref.read(appConfigProvider)));
 final appConfigProvider = ChangeNotifierProvider<AppConfigService>((ref) => AppConfigService());
 final rssProvider = Provider((ref) => RssService(ref.watch(httpProvider)));
 final extractProvider = Provider((ref) => ExtractService());

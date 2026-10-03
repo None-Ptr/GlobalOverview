@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:global_overview/providers/providers.dart';
+import 'package:global_overview/services/app_exception.dart';
 import 'package:global_overview/theme/go_tokens.dart';
 import 'package:global_overview/widgets/go_ui.dart';
 
@@ -152,7 +153,7 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
             withArticle: _mode == 'set' && _switches['article'] == true,
           );
     } catch (e) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('导出失败：$e')));
+      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('导出失败：${errText(e)}')));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
