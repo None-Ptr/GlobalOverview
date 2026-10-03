@@ -147,7 +147,7 @@ class VocabService {
   /// FSRS 简化内核：以稳定性 S(天) + 难度 D(1..10) 驱动间隔。grade: 1忘了 2模糊 3记得 4轻松。
   Future<void> scheduleReview(String head, int grade) async {
     final now = DateTime.now().millisecondsSinceEpoch;
-    final rows = await _db.select('SELECT fsrs_s, fsrs_d FROM vocab_head WHERE head = ?', [head]);
+    final rows = await _db.select('SELECT fsrs_s, fsrs_d, fsrs_state FROM vocab_head WHERE head = ?', [head]);
     if (rows.isEmpty) return;
     var s = (rows.first['fsrs_s'] as num?)?.toDouble() ?? 1.0;
     var d = (rows.first['fsrs_d'] as num?)?.toDouble() ?? 5.0;
@@ -169,7 +169,10 @@ class VocabService {
         break;
     }
     final due = now + s.round() * 86400000;
-    final state = (grade >= 3) ? ((rows.first['fsrs_s'] == null) ? 1 : 2) : 0;
+    // 首刷判定：vocab_head.fsrs_s 永远是数字（建表 DEFAULT 0 + 写入时给值），
+    // 不能用它判「是否首次复习」；正确依据是 fsrs_state==0（新词尚未评级）。
+    final curState = (rows.first['fsrs_state'] as int?) ?? 0;
+    final state = (grade >= 3) ? (curState == 0 ? 1 : 2) : 0;
     await _db.execute('UPDATE vocab_head SET fsrs_state = ?, fsrs_due = ?, fsrs_s = ?, fsrs_d = ?, lastSeen = ? WHERE head = ?',
         [state, due, s, d, now, head]);
   }
@@ -185,7 +188,20 @@ class VocabService {
     await _db.execute('DELETE FROM word_cache');
   }
 
-  /// 对收藏句子做语法/语块拆解。
+  /// 收藏一句句子（来自文章页取句/选区）。已存在则忽略（按 sentence 唯一）。
+  Future<bool> saveSentence(String sentence, String articleGuid, String articleTitle, String sourceLabel, int paraIndex, int tokIndex) async {
+    final s = sentence.trim();
+    if (s.isEmpty) return false;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    await _db.execute(
+      'INSERT OR IGNORE INTO vocab_sentence (sentence, articleGuid, articleTitle, sourceLabel, paraIndex, tokIndex, at) VALUES (?,?,?,?,?,?,?)',
+      [s, articleGuid, articleTitle, sourceLabel, paraIndex, tokIndex, now],
+    );
+    return true;
+  }
+
+  /// 对收藏句子做语法/语块拆解。结果 upsert 进 vocab_sentence（先 INSERT 保底新句、再 UPDATE 覆盖已有句的 analysis，
+  /// 不破坏 saveSentence 写入的 articleGuid 等元数据）。
   Future<Map<String, dynamic>> analyzeSentence(String sentence) async {
     const sys = '你是英语语法与语块分析助手。只输出对象，不要解释、不要 markdown。结构：'
         '{"translation":"整句自然中文翻译",'
@@ -199,7 +215,10 @@ class VocabService {
       'grammar': (res is Map && res['grammar'] is List) ? res['grammar'] : [],
       'keywords': (res is Map && res['keywords'] is List) ? res['keywords'] : [],
     };
-    await _db.execute('UPDATE vocab_sentence SET analysis = ? WHERE sentence = ?', [jsonEncode(data), sentence]);
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final enc = jsonEncode(data);
+    await _db.execute('INSERT OR IGNORE INTO vocab_sentence (sentence, analysis, at) VALUES (?,?,?)', [sentence, enc, now]);
+    await _db.execute('UPDATE vocab_sentence SET analysis = ? WHERE sentence = ?', [enc, sentence]);
     return data;
   }
 

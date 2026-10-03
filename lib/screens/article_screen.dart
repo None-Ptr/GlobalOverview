@@ -58,6 +58,8 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
   bool _showSettings = false;
   String _selText = '';
   bool _selectMode = false;
+  int _selPi = -1;
+  int _selTi = -1;
 
   /// 选中词用 (pi << 20 | ti) 编码进 Set：判定 O(1)（旧实现是列表线性扫描）。
   final Set<int> _sel = <int>{};
@@ -336,11 +338,15 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     }
     if (isLong) {
       if (isTitle) {
+        _selPi = -1;
+        _selTi = -1;
         final t = _title.trim();
         if (t.isNotEmpty) setState(() => _selText = t.length > 400 ? t.substring(0, 400) : t);
       } else {
         final sentence = _sentenceAround(ctx, ti);
         if (sentence.isNotEmpty) {
+          _selPi = pi;
+          _selTi = ti;
           setState(() => _selText = sentence.length > 400 ? sentence.substring(0, 400) : sentence);
         }
       }
@@ -852,6 +858,27 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     );
   }
 
+  Future<void> _saveSentence() async {
+    final text = _selectedText.isNotEmpty ? _selectedText : _selText;
+    if (text.trim().isEmpty) return;
+    int pi = _selPi, ti = _selTi;
+    if (_selectedText.isNotEmpty && _sel.isNotEmpty) {
+      final k = _sel.reduce((a, b) => a < b ? a : b);
+      pi = k >> 20;
+      ti = k & 0xFFFFF;
+    }
+    try {
+      await ref.read(vocabProvider).saveSentence(text, _guid, _title, _sourceHost, pi, ti);
+      ref.read(vocabRevisionProvider.notifier).bump();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已收藏句子')));
+      _clearSelection();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('收藏失败: $e')));
+    }
+  }
+
   Widget _selBar() {
     final text = _selectedText.isNotEmpty ? _selectedText : _selText;
     final preview = text.length > 24 ? '${text.substring(0, 24)}…' : text;
@@ -872,6 +899,8 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
               _openWord(t);
               _clearSelection();
             }),
+            const SizedBox(width: Go.sp3),
+            _selBtn('收藏', onTap: _saveSentence),
             const SizedBox(width: Go.sp3),
             GestureDetector(onTap: _clearSelection, child: const Text('取消', style: TextStyle(color: Color(0xBFFFFFFF), fontSize: Go.fsBodySm))),
           ],
