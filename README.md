@@ -216,3 +216,6 @@ flutter build apk --release      # 产物：build/app/outputs/flutter-apk/app-re
 ## 致谢
 
 最后感谢本项目的所有贡献者，特别感谢 ShaDouBuShi123 为本项目提供的图标和大力支持。
+感谢 [43aquarius](https://github.com/43aquarius) 和 [HMUG12](https://github.com/HMUG12) 对本项目的贡献。
+
+## QQ群开发交流群：1103837727
