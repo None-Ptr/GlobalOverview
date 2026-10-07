@@ -420,7 +420,7 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const GoIcon('alert', size: 15, color: Go.onWarning),
+          const GoIcon('warning', size: 15, color: Go.onWarning),
           const SizedBox(width: Go.sp3),
           Expanded(
             child: Column(
@@ -515,54 +515,61 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
       );
 
   Widget _listBody(List<Map<String, dynamic>> items) {
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(Go.sp4, Go.sp2, Go.sp4, Go.sp16),
-      children: [
-        if (_error.isNotEmpty)
-          _stateCard(
-            Row(
+    // 头部（错误/骨架）与尾部（加载更多/空态）拆出来，主体走 itemBuilder懒构建。
+    final header = <Widget>[
+      if (_error.isNotEmpty)
+        _stateCard(
+          Row(
+            children: [
+              Expanded(child: Text(_error, style: const TextStyle(color: Go.danger))),
+              GestureDetector(onTap: () => _refreshAll(true), child: const Text('重试', style: TextStyle(color: Go.primary, fontWeight: FontWeight.w600))),
+            ],
+          ),
+        ),
+      if (_loading && items.isEmpty)
+        for (var n = 0; n < 5; n++)
+          Container(
+            margin: const EdgeInsets.only(bottom: Go.sp3),
+            padding: const EdgeInsets.all(Go.sp5),
+            decoration: BoxDecoration(color: Go.surface, borderRadius: BorderRadius.circular(Go.rLg), border: Border.all(color: Go.outline, width: 0.5)),
+            child: const Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(child: Text(_error, style: const TextStyle(color: Go.danger))),
-                GestureDetector(onTap: () => _refreshAll(true), child: const Text('重试', style: TextStyle(color: Go.primary, fontWeight: FontWeight.w600))),
+                GoSkeleton(width: 200, height: 16),
+                SizedBox(height: Go.sp3),
+                GoSkeleton(height: 12),
+                SizedBox(height: Go.sp3),
+                GoSkeleton(width: 260, height: 12),
               ],
             ),
           ),
-        if (_loading && items.isEmpty)
-          for (var n = 0; n < 5; n++)
-            Container(
-              margin: const EdgeInsets.only(bottom: Go.sp3),
-              padding: const EdgeInsets.all(Go.sp5),
-              decoration: BoxDecoration(color: Go.surface, borderRadius: BorderRadius.circular(Go.rLg), border: Border.all(color: Go.outline, width: 0.5)),
-              child: const Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  GoSkeleton(width: 200, height: 16),
-                  SizedBox(height: Go.sp3),
-                  GoSkeleton(height: 12),
-                  SizedBox(height: Go.sp3),
-                  GoSkeleton(width: 260, height: 12),
-                ],
-              ),
-            ),
-        for (final it in items) ...[
-          _articleRow(it),
-        ],
-        if (_hasMore && items.isNotEmpty)
-          GestureDetector(
-            onTap: _loadMore,
-            child: const Padding(
-              padding: EdgeInsets.symmetric(vertical: Go.sp5),
-              child: Text('加载更多', textAlign: TextAlign.center, style: TextStyle(color: Go.primary, fontSize: Go.fsBodySm, fontWeight: FontWeight.w600)),
-            ),
+    ];
+    final footer = <Widget>[
+      if (_hasMore && items.isNotEmpty)
+        GestureDetector(
+          onTap: _loadMore,
+          child: const Padding(
+            padding: EdgeInsets.symmetric(vertical: Go.sp5),
+            child: Text('加载更多', textAlign: TextAlign.center, style: TextStyle(color: Go.primary, fontSize: Go.fsBodySm, fontWeight: FontWeight.w600)),
           ),
-        if (!_loading && _error.isEmpty && items.isEmpty)
-          GoEmpty(
-            icon: _feeds.isNotEmpty ? 'reading' : 'rss',
-            title: _feeds.isNotEmpty ? '这个分类下还没有文章' : '还没有订阅任何源',
-            desc: _feeds.isNotEmpty ? '下拉或在右上角重新拉取' : '点右下角「订阅源」挑选几个感兴趣的',
-            action: GoBtn(label: _feeds.isNotEmpty ? '立即拉取' : '去选择订阅源', onTap: () => _feeds.isNotEmpty ? _refreshAll(true) : _openCatalog()),
-          ),
-      ],
+        ),
+      if (!_loading && _error.isEmpty && items.isEmpty)
+        GoEmpty(
+          icon: _feeds.isNotEmpty ? 'reading' : 'rss',
+          title: _feeds.isNotEmpty ? '这个分类下还没有文章' : '还没有订阅任何源',
+          desc: _feeds.isNotEmpty ? '下拉或在右上角重新拉取' : '点右下角「订阅源」挑选几个感兴趣的',
+          action: GoBtn(label: _feeds.isNotEmpty ? '立即拉取' : '去选择订阅源', onTap: () => _feeds.isNotEmpty ? _refreshAll(true) : _openCatalog()),
+        ),
+    ];
+    return ListView.builder(
+      padding: const EdgeInsets.fromLTRB(Go.sp4, Go.sp2, Go.sp4, Go.sp16),
+      itemCount: header.length + items.length + footer.length,
+      itemBuilder: (context, i) {
+        if (i < header.length) return header[i];
+        final fi = i - header.length;
+        if (fi < items.length) return _articleRow(items[fi]);
+        return footer[fi - items.length];
+      },
     );
   }
 
@@ -586,6 +593,9 @@ class _ReadingScreenState extends ConsumerState<ReadingScreen> {
           Positioned(left: 0, top: 4, bottom: 4, child: Container(width: 3, decoration: BoxDecoration(color: Go.primary, borderRadius: BorderRadius.circular(Go.rFull)))),
           GoCard(
             padding: const EdgeInsets.fromLTRB(Go.sp3, Go.sp5, Go.sp4, Go.sp5),
+            // 列表项关掉毛玻璃：滚动列表里几十个 BackdropFilter 会持续重建模糊层，
+            // 而卡片底色本身接近不透明，视觉上看不出差别。
+            blur: false,
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [

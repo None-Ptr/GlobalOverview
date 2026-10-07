@@ -18,19 +18,28 @@ const _wordsPerPara = 30;
 String _paraText(int p) => [for (var i = 0; i < _wordsPerPara; i++) 'word${p}_$i'].join(' ');
 
 class _ArtDb extends FakeDb {
+  final List<String> log = [];
+
   @override
   Future<List<Map<String, dynamic>>> select(String sql, [List<Object?>? params]) async {
+    log.add(sql);
     if (sql.contains('curated_blocks')) return [];
-    if (sql.contains('wordCount FROM articles')) {
-      return [<String, dynamic>{'id': 1, 'title': 'T', 'sourceUrl': 'https://x/', 'wordCount': _paras * _wordsPerPara}];
-    }
-    if (sql.contains('html FROM articles')) return [<String, dynamic>{'html': '<html></html>'}];
-    if (sql.contains('plainText FROM articles')) {
-      return [<String, dynamic>{'plainText': [for (var p = 0; p < _paras; p++) _paraText(p)].join('\n\n')}];
-    }
-    if (sql.contains('blocks FROM articles')) {
+    // 正文现在是一次查询取齐 plainText/blocks。
+    if (sql.contains('plainText, blocks')) {
       final blocks = [for (var p = 0; p < _paras; p++) ArticleBlock(type: 'p', text: _paraText(p))];
-      return [<String, dynamic>{'blocks': jsonEncode(blocks.map((b) => b.toJson()).toList())}];
+      return [
+        {
+          'id': 1,
+          'title': 'T',
+          'sourceUrl': 'https://x/',
+          'wordCount': _paras * _wordsPerPara,
+          'plainText': [for (var p = 0; p < _paras; p++) _paraText(p)].join('\n\n'),
+          'blocks': jsonEncode(blocks.map((b) => b.toJson()).toList()),
+        }
+      ];
+    }
+    if (sql.contains('FROM articles')) {
+      return [<String, dynamic>{'id': 1, 'title': 'T', 'sourceUrl': 'https://x/', 'wordCount': _paras * _wordsPerPara}];
     }
     return [];
   }
@@ -56,6 +65,33 @@ List<RichText> _paragraphs(WidgetTester tester) => tester
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  testWidgets('打开文章只查一次正文，且不再读 html 大字段', (tester) async {
+    // 与下面那条用例一样先给足视口：默认 800x600 放不下20 段正文会触发 overflow。
+    tester.view.physicalSize = const Size(600, 1000);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    final db = _ArtDb();
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [dbProvider.overrideWithValue(db)],
+      child: const MaterialApp(home: ArticleScreen(articleId: 1)),
+    ));
+    // 不用 pumpAndSettle：正文里的 Image.network 会挂起 HttpClient 超时定时器，
+    // 且本页面渲染量大，settle 容易超时。这里只需要让首帧把正文查询跑完。
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 20));
+
+    final body = db.log.where((s) => s.contains('FROM articles') && !s.contains('curated_blocks')).toList();
+    expect(body.length, 1, reason: '正文应一次查齐，不该拆成多次: $body');
+    expect(body.single, isNot(contains('html')), reason: 'html 是整页原文，阅读器从不读它: ${body.single}');
+
+    // 卸载页面并把挂起的定时器跑干净，否则测试结束时会因 pending timer 失败。
+    // TtsService.stop() 内部有 .timeout(4s)，必须 pump 满 5s 让该计时器走完。
+    await tester.pumpWidget(const SizedBox());
+    await tester.pump(const Duration(seconds: 5));
+  });
 
   group('选区 → 查询文本', () {
     test('整句保留词间空格', () {

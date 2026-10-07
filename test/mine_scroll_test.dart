@@ -31,4 +31,26 @@ void main() {
 
     expect(tester.getTopLeft(footer).dy, lessThan(before), reason: '页面应能向上拖动');
   });
+
+  testWidgets('「发送测试通知」可点击并给出结果反馈', (tester) async {
+    tester.view.physicalSize = const Size(400, 640);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(ProviderScope(
+      overrides: [dbProvider.overrideWithValue(FakeDb())],
+      child: const MaterialApp(home: MineScreen()),
+    ));
+    await tester.pumpAndSettle();
+
+    final row = find.text('发送测试通知');
+    expect(row, findsOneWidget);
+    await tester.ensureVisible(row);
+    await tester.tap(row);
+    await tester.pumpAndSettle();
+
+    // 测试环境里 NotificationService 直接短路（无通知平台通道），故反馈是失败文案；
+    // 这里锁的是「点击有反馈」这条链路。
+    expect(find.text('发送失败：没拿到通知权限'), findsOneWidget);
+  });
 }

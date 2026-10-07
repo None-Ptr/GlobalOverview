@@ -27,6 +27,7 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
   Map<String, dynamic>? _org;
   bool _busy = false;
   Timer? _reloadTimer;
+  int _seenRev = 0;
 
   @override
   void initState() {
@@ -182,19 +183,37 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
 
   @override
   Widget build(BuildContext context) {
-    ref.listen(vocabRevisionProvider, (_, _) => _onVocabChanged());
+    final onThisTab = ref.watch(tabIndexProvider) == 3;
+    // 只有本页可见时才响应词汇变更：阅读中每点一个词都会 bump，
+    // 隐藏的 Tab 若跟着全量重载（含两次 vocab_occ 聚合）会拖慢阅读。
+    if (onThisTab) {
+      ref.listen(vocabRevisionProvider, (_, _) {
+        _seenRev = ref.read(vocabRevisionProvider);
+        _onVocabChanged();
+      });
+      // 切回本页时若期间有变更，补一次刷新，避免看到旧数据。
+      final rev = ref.read(vocabRevisionProvider);
+      if (rev != _seenRev) {
+        _seenRev = rev;
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _onVocabChanged();
+        });
+      }
+    }
     final empty = _view == 'vocab' ? _filtered.isEmpty : _sentences.isEmpty;
     return GoPage(
       topPad: false,
       globe: true,
-      globeActive: ref.watch(tabIndexProvider) == 3 && empty,
+      globeActive: onThisTab && empty,
       child: Stack(
         children: [
           Column(
             children: [
               _appbar(),
               _seg(),
-              Expanded(child: SingleChildScrollView(child: _view == 'vocab' ? _vocabView() : _sentenceView())),
+              Expanded(
+                child: _view == 'vocab' ? _vocabScroll() : SingleChildScrollView(child: _sentenceView()),
+              ),
             ],
           ),
           if (_occ != null) _occSheet(),
@@ -257,55 +276,72 @@ class _VocabScreenState extends ConsumerState<VocabScreen> {
         ),
       );
 
-  Widget _vocabView() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        GestureDetector(
-          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ReviewScreen())),
-          child: Container(
-            margin: const EdgeInsets.symmetric(horizontal: Go.sp6, vertical: Go.sp4),
-            padding: const EdgeInsets.symmetric(horizontal: Go.sp6, vertical: Go.sp5),
-            decoration: BoxDecoration(color: Go.primary.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(Go.rLg), boxShadow: Go.elev1),
-            child: Row(
-              children: [
-                Text('$_dueCount', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: Go.primary)),
-                const Padding(padding: EdgeInsets.only(left: Go.sp2), child: Text('张待复习', style: TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface))),
-                const Spacer(),
-                const Text('去复习 ›', style: TextStyle(fontSize: Go.fsBodySm, color: Go.primary, fontWeight: FontWeight.w600)),
-              ],
-            ),
+  /// 词卡量大（可达数千），用 SliverList 懒构建；早先把全部词卡塞进 Column，
+  /// 进页面一次性构建三万个 Widget，首屏直接卡住。
+  Widget _vocabScroll() {
+    final items = _filtered;
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(child: _dueCard()),
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(Go.sp6, 0, Go.sp6, Go.sp2),
+            child: Text('${_heads.length} 个词族', style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
           ),
         ),
-        Padding(padding: const EdgeInsets.fromLTRB(Go.sp6, 0, Go.sp6, Go.sp2), child: Text('${_heads.length} 个词族', style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3))),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(Go.sp6, 0, Go.sp6, Go.sp3),
-          child: Row(
-            children: [
-              for (final m in [('all', '全部'), ('word', '单词'), ('phrase', '短语')]) ...[
-                GestureDetector(
-                  onTap: () => setState(() => _mode = m.$1),
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp1),
-                    decoration: BoxDecoration(color: _mode == m.$1 ? Go.primary95 : Colors.transparent, borderRadius: BorderRadius.circular(Go.rFull), border: Border.all(color: _mode == m.$1 ? Go.primary : Go.outline, width: 0.5)),
-                    child: Text(m.$2, style: TextStyle(fontSize: Go.fsMeta, color: _mode == m.$1 ? Go.primary : Go.onSurface3)),
-                  ),
-                ),
-                const SizedBox(width: Go.sp2),
-              ],
-            ],
-          ),
-        ),
-        if (_filtered.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: Go.sp6),
-            child: Column(children: [for (final h in _filtered) _wordCard(h)]),
+        SliverToBoxAdapter(child: _modeTabs()),
+        if (items.isEmpty)
+          const SliverToBoxAdapter(
+            child: GoEmpty(icon: 'book', title: '还没有收藏的词汇', desc: '在正文里点词即可沉淀到这里'),
           )
         else
-          const GoEmpty(icon: 'book', title: '还没有收藏的词汇', desc: '在正文里点词即可沉淀到这里'),
+          SliverPadding(
+            padding: const EdgeInsets.symmetric(horizontal: Go.sp6),
+            sliver: SliverList.builder(
+              itemCount: items.length,
+              itemBuilder: (context, i) => _wordCard(items[i]),
+            ),
+          ),
+        const SliverToBoxAdapter(child: SizedBox(height: Go.sp16)),
       ],
     );
   }
+
+  Widget _dueCard() => GestureDetector(
+        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const ReviewScreen())),
+        child: Container(
+          margin: const EdgeInsets.symmetric(horizontal: Go.sp6, vertical: Go.sp4),
+          padding: const EdgeInsets.symmetric(horizontal: Go.sp6, vertical: Go.sp5),
+          decoration: BoxDecoration(color: Go.primary.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(Go.rLg), boxShadow: Go.elev1),
+          child: Row(
+            children: [
+              Text('$_dueCount', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: Go.primary)),
+              const Padding(padding: EdgeInsets.only(left: Go.sp2), child: Text('张待复习', style: TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface))),
+              const Spacer(),
+              const Text('去复习 ›', style: TextStyle(fontSize: Go.fsBodySm, color: Go.primary, fontWeight: FontWeight.w600)),
+            ],
+          ),
+        ),
+      );
+
+  Widget _modeTabs() => Padding(
+        padding: const EdgeInsets.fromLTRB(Go.sp6, 0, Go.sp6, Go.sp3),
+        child: Row(
+          children: [
+            for (final m in [('all', '全部'), ('word', '单词'), ('phrase', '短语')]) ...[
+              GestureDetector(
+                onTap: () => setState(() => _mode = m.$1),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: Go.sp4, vertical: Go.sp1),
+                  decoration: BoxDecoration(color: _mode == m.$1 ? Go.primary95 : Colors.transparent, borderRadius: BorderRadius.circular(Go.rFull), border: Border.all(color: _mode == m.$1 ? Go.primary : Go.outline, width: 0.5)),
+                  child: Text(m.$2, style: TextStyle(fontSize: Go.fsMeta, color: _mode == m.$1 ? Go.primary : Go.onSurface3)),
+                ),
+              ),
+              const SizedBox(width: Go.sp2),
+            ],
+          ],
+        ),
+      );
 
   Widget _wordCard(Map<String, dynamic> h) {
     return GestureDetector(

@@ -59,6 +59,26 @@ void main() {
     expect(qs.any((q) => q.contains('ORDER BY at DESC')), isFalse);
   });
 
+  test('getHeads 只查vocab_occ 一次，来源数与最近句合并在同一次聚合里', () async {
+    final db = _Rec();
+    await _svc(db).getHeads();
+
+    final qs = db.log.where((s) => s.contains('FROM vocab_occ')).toList();
+    expect(qs.length, 1, reason: '两次 GROUP BY 可合并成一次，避免重复全索引扫描: $qs');
+    expect(qs.single, contains('COUNT(DISTINCT articleGuid)'));
+    expect(qs.single, contains('MAX(at)'));
+  });
+
+  test('getSentences 排序后截断，避免无界拉取', () async {
+    final db = _Rec();
+    await _svc(db).getSentences();
+
+    final qs = db.log.where((s) => s.contains('FROM vocab_sentence')).toList();
+    expect(qs.length, 1);
+    expect(qs.single, contains('ORDER BY at DESC'));
+    expect(qs.single, contains('LIMIT'), reason: '句子表只用于最近句子展示，必须有上限: ${qs.single}');
+  });
+
   test('organize 按批翻页，单批不超过 100 条', () async {
     final db = _Rec();
     try {

@@ -3,6 +3,18 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:sqflite/sqflite.dart';
 
+/// 单条 SQL 的绑定变量上限：旧版 Android 的 SQLite（< 3.32）为 999。
+/// 统一按此大小切片，所有 `IN (...)` 大列表查询都必须分批，避免 "too many SQL variables"
+/// （例如错题本「全部重做 / 重判」时一次传入上千个 questionId）。
+const int sqlBindChunk = 400;
+
+/// 将列表按 [size] 切片，供过大的 `IN (...)` 拆成多条查询复用。
+Iterable<List<T>> chunked<T>(List<T> items, [int size = sqlBindChunk]) sync* {
+  for (var i = 0; i < items.length; i += size) {
+    yield items.sublist(i, i + size > items.length ? items.length : i + size);
+  }
+}
+
 class DbService {
   static const _dbName = 'global_overview.db';
 
@@ -105,13 +117,17 @@ class DbService {
   Future<Map<int, String>> loadDrafts(List<int> ids) async {
     final out = <int, String>{};
     if (ids.isEmpty) return out;
-    final rows = await select(
-        'SELECT id, questionId, draft FROM answers WHERE questionId IN (${ids.map((_) => '?').join(',')}) AND gradedAt = 0 AND draft IS NOT NULL',
-        ids);
     final best = <int, Map<String, dynamic>>{};
-    for (final r in rows) {
-      final qid = r['questionId'] as int;
-      if (!best.containsKey(qid) || (r['id'] as int) > (best[qid]!['id'] as int)) best[qid] = r;
+    // 分批查，规避绑定变量上限（错题本一次可能传入上千个 questionId）。
+    for (final chunk in chunked(ids)) {
+      final ph = List.filled(chunk.length, '?').join(',');
+      final rows = await select(
+          'SELECT id, questionId, draft FROM answers WHERE questionId IN ($ph) AND gradedAt = 0 AND draft IS NOT NULL',
+          chunk);
+      for (final r in rows) {
+        final qid = r['questionId'] as int;
+        if (!best.containsKey(qid) || (r['id'] as int) > (best[qid]!['id'] as int)) best[qid] = r;
+      }
     }
     for (final qid in ids) {
       out[qid] = best[qid] != null ? (best[qid]!['draft'] as String? ?? '') : '';
@@ -135,8 +151,10 @@ class DbService {
   Future<void> clearDrafts(List<int> questionIds) async {
     if (questionIds.isEmpty) return;
     await _withWriteLock(() async {
-      final ph = questionIds.map((_) => '?').join(',');
-      await execute('DELETE FROM answers WHERE questionId IN ($ph) AND gradedAt = 0', questionIds);
+      for (final chunk in chunked(questionIds)) {
+        final ph = List.filled(chunk.length, '?').join(',');
+        await execute('DELETE FROM answers WHERE questionId IN ($ph) AND gradedAt = 0', chunk);
+      }
     });
   }
 
@@ -146,12 +164,16 @@ class DbService {
       out[q] = [];
     }
     if (questionIds.isEmpty) return out;
-    final rows = await select(
-        'SELECT questionId, final, correct, wrong, comment, status, gradedAt FROM answers WHERE questionId IN (${questionIds.map((_) => '?').join(',')}) AND gradedAt > 0 ORDER BY gradedAt ASC',
-        questionIds);
-    for (final r in rows) {
-      final qid = r['questionId'] as int;
-      (out[qid] ??= []).add(r);
+    // 分批查：每个 questionId 只落在其中一批，批内按 gradedAt ASC，合并不破坏各题历史顺序。
+    for (final chunk in chunked(questionIds)) {
+      final ph = List.filled(chunk.length, '?').join(',');
+      final rows = await select(
+          'SELECT questionId, final, correct, wrong, comment, status, gradedAt FROM answers WHERE questionId IN ($ph) AND gradedAt > 0 ORDER BY gradedAt ASC',
+          chunk);
+      for (final r in rows) {
+        final qid = r['questionId'] as int;
+        (out[qid] ??= []).add(r);
+      }
     }
     return out;
   }
@@ -271,7 +293,9 @@ CREATE TABLE IF NOT EXISTS templates (
 /// - feed_items.pubDate：聚合阅读列表 `ORDER BY pubDate DESC LIMIT/OFFSET`（JOIN feeds），每次进页都查。
 /// - answers(questionId, gradedAt)：草稿/答题历史按这两列过滤排序。
 /// - answers(gradedAt)：错题本 / 导出页 `ORDER BY gradedAt DESC` 扫整张只增不减的 answers。
-/// - vocab_occ.lemma：词汇页 `GROUP BY lemma` 与 `WHERE lemma = ?`。
+/// - vocab_occ(lemma, at)：词汇页 `GROUP BY lemma`（取最左前缀）与 `WHERE lemma = ? ORDER BY at DESC`
+///   （getOccurrence 看某词在哪些文章出现，按时间倒序）。用复合索引同时覆盖这两类查询，
+///   不再需要单列 `idx_vocab_occ_lemma`，少维护一个热表（点词每次 INSERT）索引。
 /// - questions.setId：`WHERE setId = ?`。
 /// - vocab_head(lastSeen)：词汇列表 `ORDER BY lastSeen DESC`。
 /// - vocab_head(fsrs_due)：复习页 `WHERE fsrs_due <= ? ORDER BY fsrs_due ASC`（高频打开）。
@@ -283,14 +307,15 @@ const List<String> dbIndexStatements = [
   'CREATE INDEX IF NOT EXISTS idx_feed_items_pubdate ON feed_items(pubDate)',
   'CREATE INDEX IF NOT EXISTS idx_answers_question ON answers(questionId, gradedAt)',
   'CREATE INDEX IF NOT EXISTS idx_answers_gradedat ON answers(gradedAt)',
-  'CREATE INDEX IF NOT EXISTS idx_vocab_occ_lemma ON vocab_occ(lemma)',
+  'CREATE INDEX IF NOT EXISTS idx_vocab_occ_lemma_at ON vocab_occ(lemma, at)',
   'CREATE INDEX IF NOT EXISTS idx_questions_set ON questions(setId)',
   'CREATE INDEX IF NOT EXISTS idx_vocab_head_lastseen ON vocab_head(lastSeen)',
   'CREATE INDEX IF NOT EXISTS idx_vocab_head_fsrsdue ON vocab_head(fsrs_due)',
   'CREATE INDEX IF NOT EXISTS idx_word_cache_lemma ON word_cache(lemma)',
+  'CREATE INDEX IF NOT EXISTS idx_vocab_sentence_at ON vocab_sentence(at)',
 ];
 
 final String _indexes = '${dbIndexStatements.join(';\n')};';
 
 /// 当前数据库版本；每次改 [schema]/[_indexes] 后 +1 并在 [onUpgrade] 里补迁移。
-const int _dbVersion = 3;
+const int _dbVersion = 5;

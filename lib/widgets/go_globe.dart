@@ -28,11 +28,22 @@ class _GoGlobeState extends State<GoGlobe> with SingleTickerProviderStateMixin {
   AppLifecycleListener? _lifecycle;
   bool _foreground = true;
   bool _reduceMotion = false;
-  List<List<Offset>>? _rings;
+  _GlobeGeo? _geo;
+
+  /// 每 [_paintEvery] 个 vsync 帧才触发一次重绘：自转 105s/圈，60fps 严重过剩，
+  /// 降到约 20fps 肉眼无差别，但把地球每帧的 Path 构建/绘制成本降到 1/3。
+  static const _paintEvery = 3;
+  final ValueNotifier<int> _tick = ValueNotifier<int>(0);
+  int _frameCount = 0;
+
+  void _onFrame() {
+    if (++_frameCount % _paintEvery == 0) _tick.value++;
+  }
 
   @override
   void initState() {
     super.initState();
+    _c.addListener(_onFrame);
     _lifecycle = AppLifecycleListener(
       onStateChange: (s) {
         final fg = s == AppLifecycleState.resumed;
@@ -65,6 +76,8 @@ class _GoGlobeState extends State<GoGlobe> with SingleTickerProviderStateMixin {
   @override
   void dispose() {
     _lifecycle?.dispose();
+    _c.removeListener(_onFrame);
+    _tick.dispose();
     _c.dispose();
     super.dispose();
   }
@@ -80,21 +93,22 @@ class _GoGlobeState extends State<GoGlobe> with SingleTickerProviderStateMixin {
 
   Future<void> _load() async {
     final rings = await landRings();
-    if (mounted) setState(() => _rings = rings);
+    final geo = _GlobeGeo.build(rings); // 一次性预计算所有点的基准向量
+    if (mounted) setState(() => _geo = geo);
   }
 
   @override
   Widget build(BuildContext context) {
     if (Theme.of(context).brightness == Brightness.light) return const SizedBox.shrink();
-    final rings = _rings;
+    final geo = _geo;
     return IgnorePointer(
       child: Stack(
         fit: StackFit.expand,
         children: [
-          if (rings != null)
+          if (geo != null)
             RepaintBoundary(
               child: CustomPaint(
-                painter: _GlobePainter(anim: _c, rings: rings, radiusFactor: widget.radiusFactor),
+                painter: _GlobePainter(anim: _c, repaint: _tick, geo: geo, radiusFactor: widget.radiusFactor),
                 size: Size.infinite,
               ),
             ),
@@ -160,18 +174,64 @@ const double _tilt = 23.5 * math.pi / 180;
 const double _gridStep = 15; // 经纬网间隔（度）
 const double _baseOpacity = 0.16; // 球体整体不透明度（真机微调入口）
 
+/// 预计算几何：把经纬网 / 陆地 / 城市点的**基准球面单位向量**（自转=0、未倾斜）一次算好。
+/// 每帧只需对每个点做一次「绕 Y 轴自转 + 绕 X 轴倾斜」的乘加，取代原实现每帧每点的
+/// 4 次三角函数（cos/sin(lat)、cos/sin(lon)）——这是地球每帧 UI 线程最大的开销来源。
+class _GlobeGeo {
+  final List<List<_P3>> meridians;
+  final List<List<_P3>> parallels;
+  final List<_P3> equator;
+  final List<List<_P3>> land;
+  final List<_P3> cities;
+
+  _GlobeGeo._(this.meridians, this.parallels, this.equator, this.land, this.cities);
+
+  static _P3 _base(double lat, double lon) {
+    final la = lat * math.pi / 180;
+    final lo = lon * math.pi / 180;
+    return (x: math.cos(la) * math.sin(lo), y: math.sin(la), z: math.cos(la) * math.cos(lo));
+  }
+
+  factory _GlobeGeo.build(List<List<Offset>> rings) => _GlobeGeo._(
+        [
+          for (double lon = -180; lon < 180; lon += _gridStep)
+            [for (double lat = -90; lat <= 90; lat += 5) _base(lat, lon)],
+        ],
+        [
+          for (double lat = -75; lat <= 75; lat += _gridStep)
+            [for (double lon = -180; lon <= 180; lon += 5) _base(lat, lon)],
+        ],
+        [for (double lon = -180; lon <= 180; lon += 5) _base(0, lon)],
+        // landRings 每点为 Offset(lon, lat)：dx=lon, dy=lat
+        [
+          for (final ring in rings) [for (final p in ring) _base(p.dy, p.dx)],
+        ],
+        [for (final c in _cities) _base(c.$1, c.$2)],
+      );
+}
+
 class _GlobePainter extends CustomPainter {
   final Animation<double> anim;
-  final List<List<Offset>> rings;
+  final _GlobeGeo geo;
   final double radiusFactor;
 
-  _GlobePainter({required this.anim, required this.rings, required this.radiusFactor}) : super(repaint: anim);
+  _GlobePainter({required this.anim, required Listenable repaint, required this.geo, required this.radiusFactor}) : super(repaint: repaint);
 
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
     final r = size.width * radiusFactor;
-    final spin = anim.value; // 0..1 圈
+    final th = anim.value * math.pi * 2; // 自转角
+    final c = math.cos(th), s = math.sin(th);
+    final ct = math.cos(_tilt), st = math.sin(_tilt);
+
+    // 基准向量 → 屏幕前的 3D 点（自转 + 倾斜），纯乘加，无三角函数
+    _P3 ap(_P3 b) {
+      final x = b.x * c + b.z * s;
+      final z = b.z * c - b.x * s;
+      final y = b.y;
+      return (x: x * ct - y * st, y: x * st + y * ct, z: z);
+    }
 
     _rim(canvas, center, r);
 
@@ -188,22 +248,22 @@ class _GlobePainter extends CustomPainter {
       ..color = Go.primary.withValues(alpha: _baseOpacity * 0.35);
 
     // 经纬网
-    for (double lon = -180; lon < 180; lon += _gridStep) {
-      canvas.drawPath(_polyPath(_meridian(lon, spin), center, r), grid);
+    for (final m in geo.meridians) {
+      canvas.drawPath(_polyPath([for (final b in m) ap(b)], center, r), grid);
     }
-    for (double lat = -75; lat <= 75; lat += _gridStep) {
-      canvas.drawPath(_polyPath(_parallel(lat, spin), center, r), grid);
+    for (final p in geo.parallels) {
+      canvas.drawPath(_polyPath([for (final b in p) ap(b)], center, r), grid);
     }
     // 赤道略亮
     final eq = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.0
       ..color = Go.secondary.withValues(alpha: _baseOpacity * 0.95);
-    canvas.drawPath(_polyPath(_parallel(0, spin), center, r), eq);
+    canvas.drawPath(_polyPath([for (final b in geo.equator) ap(b)], center, r), eq);
 
     // 陆地
-    for (final ring in rings) {
-      final pts = [for (final p in ring) _to3d(p.dy, p.dx, spin)];
+    for (final ring in geo.land) {
+      final pts = [for (final b in ring) ap(b)];
       var allFront = true;
       for (final p in pts) {
         if (p.z <= 0) {
@@ -218,13 +278,11 @@ class _GlobePainter extends CustomPainter {
 
     // 城市光点
     final dot = Paint()..style = PaintingStyle.fill;
-    final t = spin * math.pi * 2;
-    for (var i = 0; i < _cities.length; i++) {
-      final c = _cities[i];
-      final p = _to3d(c.$1, c.$2, spin);
+    for (var i = 0; i < geo.cities.length; i++) {
+      final p = ap(geo.cities[i]);
       if (p.z <= 0.05) continue;
       final o = _screen(p, center, r);
-      final twinkle = 0.5 + 0.5 * math.sin(t * 2 + i * 1.7);
+      final twinkle = 0.5 + 0.5 * math.sin(th * 2 + i * 1.7);
       dot.color = Color.lerp(Go.secondary, Colors.white, 0.6)!.withValues(alpha: 0.30 + 0.45 * twinkle);
       canvas.drawCircle(o, math.max(1.1, r * 0.008), dot);
     }
@@ -243,24 +301,6 @@ class _GlobePainter extends CustomPainter {
       ..strokeWidth = 1.1
       ..color = Go.secondary.withValues(alpha: 0.42);
     canvas.drawCircle(c, r, edge);
-  }
-
-  List<_P3> _meridian(double lon, double spin) => [
-        for (double lat = -90; lat <= 90; lat += 5) _to3d(lat, lon, spin),
-      ];
-
-  List<_P3> _parallel(double lat, double spin) => [
-        for (double lon = -180; lon <= 180; lon += 5) _to3d(lat, lon, spin),
-      ];
-
-  _P3 _to3d(double lat, double lon, double spin) {
-    final la = lat * math.pi / 180;
-    final lo = (lon + spin * 360) * math.pi / 180;
-    final x = math.cos(la) * math.sin(lo);
-    final y = math.sin(la);
-    final z = math.cos(la) * math.cos(lo);
-    final ct = math.cos(_tilt), st = math.sin(_tilt);
-    return (x: x * ct - y * st, y: x * st + y * ct, z: z);
   }
 
   Offset _screen(_P3 p, Offset c, double r) => Offset(c.dx + p.x * r, c.dy - p.y * r);
@@ -311,5 +351,5 @@ class _GlobePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _GlobePainter old) => old.rings != rings || old.radiusFactor != radiusFactor;
+  bool shouldRepaint(covariant _GlobePainter old) => old.geo != geo || old.radiusFactor != radiusFactor;
 }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:global_overview/providers/providers.dart';
 import 'package:global_overview/services/app_exception.dart';
+import 'package:global_overview/services/db_service.dart';
 import 'package:global_overview/services/quiz_service.dart';
 import 'package:global_overview/screens/quiz_screen.dart';
 import 'package:global_overview/screens/export_screen.dart';
@@ -58,11 +59,18 @@ class _PlanScreenState extends ConsumerState<PlanScreen> {
       _presets = await db.select('SELECT * FROM presets ORDER BY id ASC');
       if (_presets.isNotEmpty && _activePreset == null) _activePreset = _presets.first;
 
+      // 只取计划里用到的文章：原来全表扫 articles 再在 Dart 里过滤；按 id 分批规避绑定变量上限。
       final plan = await db.select('SELECT articleId FROM plan_items');
-      final ids = plan.map((p) => '${p['articleId']}').toSet();
-      final all = await db.select(
-          'SELECT id, guid, title, wordCount, (curated_blocks IS NOT NULL AND length(curated_blocks) > 4) AS hasCurated FROM articles');
-      _articles = all.where((a) => ids.contains('${a['id']}')).toList();
+      final ids = plan.map((p) => '${p['articleId']}').toSet().toList();
+      final acc = <Map<String, dynamic>>[];
+      for (final chunk in chunked(ids)) {
+        final ph = List.filled(chunk.length, '?').join(',');
+        acc.addAll(await db.select(
+            'SELECT id, guid, title, wordCount, (curated_blocks IS NOT NULL AND length(curated_blocks) > 4) AS hasCurated FROM articles WHERE id IN ($ph)',
+            chunk));
+      }
+      acc.sort((a, b) => (a['id'] as int).compareTo(b['id'] as int));
+      _articles = acc;
       await _loadSets();
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(errText(e))));

@@ -78,6 +78,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
   int _flashPara = -1;
   int _flashTok = -1;
   final _scrollCtrl = ScrollController();
+  bool _readAwarded = false; // 本文“读完”见闻是否已发放
   final Map<int, int> _imgRetry = {}; // blockIndex -> retry count
   final Set<int> _imgErr = {};
   final Map<int, GlobalKey> _paraKeys = {};
@@ -107,6 +108,24 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     });
   }
 
+  /// 读完一篇文章 → 见闻 +30（按 guid 每天只计一次）。
+  /// 判定：滚动到文末（留有 24px 余量）；若正文短于视口、无从滚动则视为已读完。
+  void _maybeAwardRead(ScrollMetrics m) {
+    if (_readAwarded) return;
+    if (m.maxScrollExtent <= 0 || m.pixels >= m.maxScrollExtent - 24) {
+      _readAwarded = true;
+      ref.read(habitProvider).awardRead(_guid).then((ok) {
+        if (ok) ref.read(habitRevisionProvider.notifier).bump();
+      });
+    }
+  }
+
+  /// 收藏一个词/句 → 见闻 +1（单篇封顶 +10，在服务层处理）。
+  void _awardCollect() {
+    ref.read(habitProvider).awardCollect(_guid);
+    ref.read(habitRevisionProvider.notifier).bump();
+  }
+
   @override
   void dispose() {
     // Riverpod 3 禁止在 dispose 里用 ref（会抛 StateError，导致 stop() 根本没执行）
@@ -125,21 +144,18 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     });
     try {
       final db = ref.read(dbProvider);
+      // 不取 html：阅读器只用 plainText/blocks。
+      const cols = 'id, title, sourceUrl, wordCount, plainText, blocks';
       Map<String, dynamic>? row;
       if (_id != null) {
-        row = await _first(db, 'SELECT id, title, sourceUrl, wordCount FROM articles WHERE id = ?', [_id]);
+        row = await _first(db, 'SELECT $cols FROM articles WHERE id = ?', [_id]);
       } else {
-        row = await _first(db, 'SELECT id, title, sourceUrl, wordCount FROM articles WHERE guid = ?', [_guid]);
+        row = await _first(db, 'SELECT $cols FROM articles WHERE guid = ?', [_guid]);
       }
       if (row == null) {
         _error = '未找到正文，请返回列表重新抓取';
       } else {
-        final aid = row['id'] as int;
-        final full = Map<String, dynamic>.of(row);
-        full['html'] = (await _first(db, 'SELECT html FROM articles WHERE id = ?', [aid]))?['html'];
-        full['plainText'] = (await _first(db, 'SELECT plainText FROM articles WHERE id = ?', [aid]))?['plainText'];
-        full['blocks'] = (await _first(db, 'SELECT blocks FROM articles WHERE id = ?', [aid]))?['blocks'];
-        _applyRow(full);
+        _applyRow(row);
       }
       await _loadCuratedIfAny();
     } catch (e) {
@@ -170,7 +186,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
       }
     }
     if (bs.isEmpty) {
-      bs = (_plain.split(RegExp(r'\n\s*\n')).map((s) => s.trim()).where((s) => s.isNotEmpty)).map((t) => ArticleBlock(type: 'p', text: t)).toList();
+      bs = (_plain.split(_reParaSplit).map((s) => s.trim()).where((s) => s.isNotEmpty)).map((t) => ArticleBlock(type: 'p', text: t)).toList();
     }
     _blocks = bs;
     _error = '';
@@ -200,18 +216,24 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
   }
 
   // ================= tokenize（对齐 article.vue）=================
+  static final _reZeroWidth = RegExp(r'[\u200b-\u200f\u2060\u00ad\ufeff]');
+  static final _reToken = RegExp(r"(\s+|[A-Za-z][A-Za-z'’-]*[A-Za-z]|[A-Za-z]|[^A-Za-z\s]+)");
+  static final _reSpaceOnly = RegExp(r'^\s+$');
+  static final _reNonNewline = RegExp(r'[^\n\t]');
+  static final _reWordOnly = RegExp(r"^[A-Za-z][A-Za-z'’-]*$");
+  static final _reParaSplit = RegExp(r'\n\s*\n');
+  static final _reSentenceEnd = RegExp(r'[.!?\u3002\uff01\uff1f]');
+
   List<_Tok> _tokenize(String? p) {
     if (p == null || p.isEmpty) return [];
     final out = <_Tok>[];
-    var s = p.replaceAll(RegExp(r'[\u200b-\u200f\u2060\u00ad\ufeff]'), ' ');
-    final re = RegExp(r"(\s+|[A-Za-z][A-Za-z'’-]*[A-Za-z]|[A-Za-z]|[^A-Za-z\s]+)");
-    for (final m in re.allMatches(s)) {
+    var s = p.replaceAll(_reZeroWidth, ' ');
+    for (final m in _reToken.allMatches(s)) {
       var t = m.group(0)!;
-      if (RegExp(r'^\s+$').hasMatch(t)) {
-        t = t.replaceAll(RegExp(r'[^\n\t]'), '\u00A0');
+      if (_reSpaceOnly.hasMatch(t)) {
+        t = t.replaceAll(_reNonNewline, '\u00A0');
       }
-      final word = RegExp(r"^[A-Za-z][A-Za-z'’-]*$").hasMatch(t);
-      out.add(_Tok(t, word));
+      out.add(_Tok(t, _reWordOnly.hasMatch(t)));
     }
     return out;
   }
@@ -227,7 +249,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     var sIdx = off;
     while (sIdx > 0) {
       final ch = p[sIdx - 1];
-      if (RegExp(r'[.!?。！？]').hasMatch(ch)) break;
+      if (_reSentenceEnd.hasMatch(ch)) break;
       sIdx--;
     }
     final rest = p.substring(off);
@@ -356,6 +378,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
       final sentence = isTitle ? _title.trim() : _sentenceAround(ctx, ti);
       ref.read(vocabProvider).recordOccurrence(tk.text, sentence, _guid, _title, _sourceHost, pi, ti);
       ref.read(vocabRevisionProvider.notifier).bump();
+      _awardCollect(); // 点词沉淀 → 收藏见闻（单篇封顶）
     }
     _openWord(tk.text);
   }
@@ -587,7 +610,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
           ),
           ValueListenableBuilder<int>(
             valueListenable: _selVer,
-            builder: (_, __, ___) => (_selText.isNotEmpty || _selectedText.isNotEmpty) ? _selBar() : const SizedBox(),
+            builder: (_, _, _) => (_selText.isNotEmpty || _selectedText.isNotEmpty) ? _selBar() : const SizedBox(),
           ),
           if (_ttsSynthesizing) _ttsMask(),
         ],
@@ -725,25 +748,37 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
         widgets.add(_imageBlock(b, bi));
       }
     }
-    return SingleChildScrollView(
-      controller: _scrollCtrl,
-      padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom + Go.sp8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          _cover(),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: Go.sp6),
-            child: DefaultTextStyle(
-              style: TextStyle(fontSize: cfg.fontSize, height: cfg.lineHeight, color: Go.onSurface),
-              child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: widgets),
-            ),
+    return NotificationListener<ScrollMetricsNotification>(
+      onNotification: (n) {
+        _maybeAwardRead(n.metrics);
+        return false;
+      },
+      child: NotificationListener<ScrollNotification>(
+        onNotification: (n) {
+          _maybeAwardRead(n.metrics);
+          return false;
+        },
+        child: SingleChildScrollView(
+          controller: _scrollCtrl,
+          padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom + Go.sp8),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              _cover(),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: Go.sp6),
+                child: DefaultTextStyle(
+                  style: TextStyle(fontSize: cfg.fontSize, height: cfg.lineHeight, color: Go.onSurface),
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: widgets),
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: Go.sp12),
+                child: Text('— 全文完 —', textAlign: TextAlign.center, style: TextStyle(color: Go.onSurface3, fontSize: Go.fsMeta, letterSpacing: 1)),
+              ),
+            ],
           ),
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: Go.sp12),
-            child: Text('— 全文完 —', textAlign: TextAlign.center, style: TextStyle(color: Go.onSurface3, fontSize: Go.fsMeta, letterSpacing: 1)),
-          ),
-        ],
+        ),
       ),
     );
   }
@@ -870,6 +905,7 @@ class _ArticleScreenState extends ConsumerState<ArticleScreen> {
     try {
       await ref.read(vocabProvider).saveSentence(text, _guid, _title, _sourceHost, pi, ti);
       ref.read(vocabRevisionProvider.notifier).bump();
+      _awardCollect(); // 收藏句子 → 收藏见闻（单篇封顶）
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已收藏句子')));
       _clearSelection();

@@ -12,14 +12,12 @@ class VocabService {
   Future<void> recordOccurrence(String word, String sentence, String articleGuid, String articleTitle, String sourceLabel, int paraIndex, int tokIndex) async {
     final lemma = lemmaOf(word);
     final now = DateTime.now().millisecondsSinceEpoch;
-    // 同一处同一词只记一次：否则重复点词会因 INSERT OR IGNORE 未真正写入而把 occCount 刷高。
-    final exist = await _db.select(
-        'SELECT id FROM vocab_occ WHERE word = ? AND articleGuid = ? AND paraIndex = ? AND tokIndex = ?',
-        [word, articleGuid, paraIndex, tokIndex]);
-    if (exist.isNotEmpty) return;
-    await _db.execute(
+    // 同一处同一词只记一次：用 INSERT OR IGNORE + 返回 id 判定（命中 UNIQUE 时 rawInsert 返回 0），
+    // 省掉一次存在性 SELECT；避免重复点词把 occCount 刷高。点词是很热的写路径，每少一次往返都划算。
+    final id = await _db.insertReturnId(
         'INSERT OR IGNORE INTO vocab_occ (word, lemma, articleGuid, articleTitle, sourceLabel, sentence, paraIndex, tokIndex, at) VALUES (?,?,?,?,?,?,?,?,?)',
         [word, lemma, articleGuid, articleTitle, sourceLabel, sentence, paraIndex, tokIndex, now]);
+    if (id == 0) return; // 该位置已记录过
     final rows = await _db.select('SELECT head FROM vocab_head WHERE head = ?', [lemma]);
     if (rows.isEmpty) {
       await _db.execute(
@@ -78,10 +76,14 @@ class VocabService {
     // 结果行数由「词条数」决定而不是「出现次数」。
     // 注：SQLite 在聚合查询里对裸列（sentence）的取值来自 max(at) 命中的那一行，这是
     // SQLite 的既定行为（本 App 只跑 Android/sqflite）。
-    final cntRows = await _db.select('SELECT lemma, COUNT(DISTINCT articleGuid) AS c FROM vocab_occ GROUP BY lemma');
-    final sourceCount = <String, int>{for (final r in cntRows) '${r['lemma']}': (r['c'] as int?) ?? 0};
-    final lastRows = await _db.select('SELECT lemma, MAX(at) AS m, sentence FROM vocab_occ GROUP BY lemma');
-    final latestSentence = <String, String>{for (final r in lastRows) '${r['lemma']}': (r['sentence'] as String?) ?? ''};
+    final aggRows = await _db.select('SELECT lemma, COUNT(DISTINCT articleGuid) AS c, MAX(at) AS m, sentence FROM vocab_occ GROUP BY lemma');
+    final sourceCount = <String, int>{};
+    final latestSentence = <String, String>{};
+    for (final r in aggRows) {
+      final k = '${r['lemma']}';
+      sourceCount[k] = (r['c'] as int?) ?? 0;
+      latestSentence[k] = (r['sentence'] as String?) ?? '';
+    }
     // result 是整段 JSON，一次全表取会逼近 Android CursorWindow 上限，按 100 条分批。
     final heads = list.map((h) => '${h['head']}').toList();
     final wcMap = <String, Map<String, dynamic>>{};
@@ -127,14 +129,18 @@ class VocabService {
         .toList();
   }
 
+  /// 页面要显示具体数字，且 fsrs_due 有索引，走的是索引内计数。
   Future<int> dueCount() async {
     final now = DateTime.now().millisecondsSinceEpoch;
     final rows = await _db.select('SELECT COUNT(*) AS n FROM vocab_head WHERE fsrs_due <= ?', [now]);
     return (rows.isEmpty ? 0 : (rows.first['n'] as int? ?? 0));
   }
 
+  /// 句子表只用于「最近句子」展示，排序后截断即可。
+  static const _sentenceLimit = 200;
+
   Future<List<Map<String, dynamic>>> getSentences() async {
-    return (await _db.select('SELECT sentence, articleGuid, articleTitle, sourceLabel, paraIndex, tokIndex, at, analysis FROM vocab_sentence ORDER BY at DESC'))
+    return (await _db.select('SELECT sentence, articleGuid, articleTitle, sourceLabel, paraIndex, tokIndex, at, analysis FROM vocab_sentence ORDER BY at DESC LIMIT $_sentenceLimit'))
         .map((e) => Map<String, dynamic>.of(e))
         .toList();
   }

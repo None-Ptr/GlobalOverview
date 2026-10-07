@@ -2,15 +2,18 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:global_overview/app_info.dart';
+import 'package:global_overview/services/update_controller.dart';
 import 'package:global_overview/providers/providers.dart';
 import 'package:global_overview/screens/model_form_screen.dart';
 import 'package:global_overview/screens/translate_form_screen.dart';
+import 'package:global_overview/services/notification_service.dart';
 import 'package:global_overview/services/quiz_service.dart';
 import 'package:global_overview/services/translate_service.dart';
 import 'package:global_overview/theme/go_tokens.dart';
 import 'package:global_overview/widgets/go_icon.dart';
+import 'package:global_overview/widgets/go_time_picker.dart';
 import 'package:global_overview/widgets/go_ui.dart';
+import 'package:global_overview/widgets/go_update_sheet.dart';
 
 class MineScreen extends ConsumerStatefulWidget {
   const MineScreen({super.key});
@@ -22,10 +25,119 @@ class _MineScreenState extends ConsumerState<MineScreen> {
   String _targetLevel = 'CET6';
   final _levels = QuizService.examLevels.keys.toList();
 
+  // —— 学习提醒 ——
+  bool _notifEnabled = false;
+  int _notifHour = NotificationService.defaultHour;
+  int _notifMinute = 0;
+
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadGoal());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadGoal();
+      _loadNotif();
+      _maybeUpdatePrompt();
+    });
+  }
+
+  Future<void> _loadNotif() async {
+    final ns = await ref.read(notificationProvider).loadSettings();
+    if (!mounted) return;
+    setState(() {
+      _notifEnabled = ns.enabled;
+      _notifHour = ns.hour;
+      _notifMinute = ns.minute;
+    });
+  }
+
+  String _fmtTime(int h, int m) => '${h.toString().padLeft(2, '0')}:${m.toString().padLeft(2, '0')}';
+
+  Future<void> _toggleNotif() async {
+    final next = !_notifEnabled;
+    final notif = ref.read(notificationProvider);
+    if (next) {
+      final granted = await notif.requestPermission();
+      if (!mounted) return;
+      if (!granted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('未获得通知权限')));
+        return;
+      }
+    }
+    await notif.saveSettings(enabled: next, hour: _notifHour, minute: _notifMinute);
+    if (mounted) setState(() => _notifEnabled = next);
+    ref.read(habitRevisionProvider.notifier).bump(); // 触发首页重排通知
+  }
+
+  Future<void> _pickNotifTime() async {
+    final t = await showGoTimePicker(context: context, initialTime: TimeOfDay(hour: _notifHour, minute: _notifMinute));
+    if (t == null || !mounted) return;
+    final notif = ref.read(notificationProvider);
+    await notif.saveSettings(enabled: _notifEnabled, hour: t.hour, minute: t.minute);
+    if (mounted) {
+      setState(() {
+        _notifHour = t.hour;
+        _notifMinute = t.minute;
+      });
+    }
+    ref.read(habitRevisionProvider.notifier).bump();
+  }
+
+  // —— 应用内更新 ——
+
+  /// 入口行副标题：把状态机翻译成一句人话。
+  String _updateSub(UpdateController c) => switch (c.phase) {
+        UpdatePhase.checking => '正在检查…',
+        UpdatePhase.available => '发现 v${c.info?.version ?? ''}',
+        UpdatePhase.latest => '已是最新版本',
+        UpdatePhase.failed => c.error ?? '检查失败',
+        UpdatePhase.downloading => '正在下载…',
+        UpdatePhase.verifying => '正在校验…',
+        UpdatePhase.installing => '等待安装确认',
+        _ => c.installedLabel.isEmpty ? '当前版本' : '当前 ${c.installedLabel}',
+      };
+
+  DateTime? _lastManualCheck;
+
+  Future<void> _checkUpdate() async {
+    final now = DateTime.now();
+    if (_lastManualCheck != null && now.difference(_lastManualCheck!) < const Duration(seconds: 30)) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('刚检查过，稍等一会儿再试')));
+      return;
+    }
+    _lastManualCheck = now;
+    final c = ref.read(updateProvider);
+    await c.checkNow();
+    if (!mounted) return;
+    switch (c.phase) {
+      case UpdatePhase.latest:
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('已是最新版本')));
+      case UpdatePhase.failed:
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(c.error ?? '检查失败')));
+      case UpdatePhase.available:
+        await showGoUpdateSheet(context, c);
+      default:
+        break;
+    }
+  }
+
+  /// 启动时静默检查（每天最多一次）；同一版本只弹一次卡片，之后只留红点。
+  Future<void> _maybeUpdatePrompt() async {
+    final c = ref.read(updateProvider);
+    await c.init();
+    await c.autoCheck();
+    if (!mounted) return;
+    if (await c.shouldPrompt() && mounted) {
+      await showGoUpdateSheet(context, c);
+    }
+  }
+
+  /// 立即发一条通知，用来确认通知权限/通道正常（定时是否生效另说）。
+  Future<void> _sendTestNotif() async {
+    final ok = await ref.read(notificationProvider).sendTest();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(ok ? '已发送，下拉通知栏查看' : '发送失败：没拿到通知权限')),
+    );
   }
 
   Future<void> _loadGoal() async {
@@ -86,6 +198,7 @@ class _MineScreenState extends ConsumerState<MineScreen> {
   @override
   Widget build(BuildContext context) {
     ref.listen(targetLevelRevisionProvider, (_, _) => _loadGoal());
+    final update = ref.watch(updateProvider);
     final cfg = ref.watch(appConfigProvider);
     final models = cfg.profiles;
     final translators = cfg.translators;
@@ -239,6 +352,43 @@ class _MineScreenState extends ConsumerState<MineScreen> {
                       ],
                     ),
 
+                    // —— 学习提醒 ——
+                    GoSection(
+                      title: '学习提醒',
+                      children: [
+                        _hint('本地通知：每日提醒 + 航程预警，可随时关闭'),
+                        GoCard(
+                          padding: EdgeInsets.zero,
+                          child: Column(
+                            children: [
+                              _navRow(
+                                icon: 'bell',
+                                title: '开启提醒',
+                                sub: _notifEnabled ? '每日 ${_fmtTime(_notifHour, _notifMinute)} 提醒' : '已关闭',
+                                onTap: _toggleNotif,
+                                divider: true,
+                              ),
+                              if (_notifEnabled)
+                                _navRow(
+                                  icon: 'clock',
+                                  title: '提醒时间',
+                                  sub: _fmtTime(_notifHour, _notifMinute),
+                                  onTap: _pickNotifTime,
+                                  divider: true,
+                                ),
+                              _navRow(
+                                icon: 'bell-ring',
+                                title: '发送测试通知',
+                                sub: '立刻发一条，确认能收到',
+                                onTap: _sendTestNotif,
+                                divider: false,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+
                     // —— 数据管理 ——
                     GoSection(
                       title: '数据管理',
@@ -281,17 +431,37 @@ class _MineScreenState extends ConsumerState<MineScreen> {
                       ],
                     ),
 
-                    const Padding(
-                      padding: EdgeInsets.only(top: Go.sp8),
+                    // —— 关于 ——
+                    GoSection(
+                      title: '关于',
+                      children: [
+                        GoCard(
+                          padding: EdgeInsets.zero,
+                          child: _navRow(
+                            icon: 'refresh',
+                            title: '检查更新',
+                            sub: _updateSub(update),
+                            onTap: _checkUpdate,
+                            spin: update.phase == UpdatePhase.checking,
+                            dot: update.phase == UpdatePhase.available,
+                            highlight: update.phase == UpdatePhase.available,
+                            divider: false,
+                          ),
+                        ),
+                      ],
+                    ),
+
+                    Padding(
+                      padding: const EdgeInsets.only(top: Go.sp8),
                       child: Column(
                         children: [
-                          Text(
+                          const Text(
                             'GlobalOverview · By ShaDouBuShi & _Null_Ptr',
                             textAlign: TextAlign.center,
                             style: TextStyle(fontSize: Go.fsCap, color: Go.onSurfaceDisabled, letterSpacing: 0.5),
                           ),
-                          SizedBox(height: Go.sp1),
-                          Text(kAppVersion, textAlign: TextAlign.center, style: TextStyle(fontSize: Go.fsCap, color: Go.onSurfaceDisabled)),
+                          const SizedBox(height: Go.sp1),
+                          Text(update.installedLabel, textAlign: TextAlign.center, style: const TextStyle(fontSize: Go.fsCap, color: Go.onSurfaceDisabled)),
                         ],
                       ),
                     ),
@@ -408,6 +578,7 @@ class _MineScreenState extends ConsumerState<MineScreen> {
         final decoded = jsonDecode(raw);
         if (decoded is! Map) throw const FormatException();
       } catch (_) {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('需要是一个 JSON 对象')));
         return;
       }
@@ -439,7 +610,17 @@ class _MineScreenState extends ConsumerState<MineScreen> {
     );
   }
 
-  Widget _navRow({required String icon, required String title, String? sub, VoidCallback? onTap, bool danger = false, bool divider = true}) {
+  Widget _navRow({
+    required String icon,
+    required String title,
+    String? sub,
+    VoidCallback? onTap,
+    bool danger = false,
+    bool divider = true,
+    bool highlight = false,
+    bool dot = false,
+    bool spin = false,
+  }) {
     return Column(
       children: [
         if (divider) const Divider(height: 0.5, thickness: 0.5, color: Go.outline),
@@ -453,7 +634,7 @@ class _MineScreenState extends ConsumerState<MineScreen> {
                   width: Go.r(64),
                   height: Go.r(64),
                   decoration: BoxDecoration(color: danger ? Go.danger.withValues(alpha: 0.14) : Go.primary95, borderRadius: BorderRadius.circular(Go.rSm)),
-                  child: Center(child: GoIcon(icon, size: Go.r(48), color: danger ? Go.danger : Go.primary)),
+                  child: Center(child: GoIcon(icon, size: Go.r(48), color: danger ? Go.danger : Go.primary, spin: spin)),
                 ),
                 const SizedBox(width: Go.sp4),
                 Expanded(
@@ -463,11 +644,18 @@ class _MineScreenState extends ConsumerState<MineScreen> {
                       Text(title, style: TextStyle(fontSize: Go.fsBodySm, fontWeight: FontWeight.w500, color: danger ? Go.error : Go.onSurface)),
                       if (sub != null) ...[
                         const SizedBox(height: 1),
-                        Text(sub, style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
+                        Text(sub, style: TextStyle(fontSize: Go.fsMeta, color: highlight ? Go.primary : Go.onSurface3)),
                       ],
                     ],
                   ),
                 ),
+                if (dot)
+                  Container(
+                    width: Go.sp4,
+                    height: Go.sp4,
+                    margin: const EdgeInsets.only(right: Go.sp2),
+                    decoration: const BoxDecoration(color: Go.primary, shape: BoxShape.circle),
+                  ),
                 const Icon(Icons.chevron_right, size: 18, color: Go.onSurfaceDisabled),
               ],
             ),

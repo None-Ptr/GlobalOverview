@@ -1,0 +1,13 @@
+{
+  "name": "globaloverview-landing",
+  "private": true,
+  "description": "落地页（docs/）的 Tailwind 构建工具。产物 docs/style.css 要提交进仓库，Pages 部署时零构建。",
+  "scripts": {
+    "css": "tailwindcss -i input.css -o ../../docs/style.css --minify",
+    "dev": "tailwindcss -i input.css -o ../../docs/style.css --watch"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.1.14",
+    "tailwindcss": "^4.1.14"
+  }
+}

@@ -1,0 +1,81 @@
+@import "tailwindcss";
+
+/* 只扫落地页，别把仓库里其它文件卷进来 */
+@source "../../docs/index.html";
+
+/* 复刻 App 的配色（对应 lib/theme/go_tokens.dart），保证网页与 App 是同一套色板 */
+@theme {
+  --color-bg: #0e0a1a;
+  --color-surface: #171327;
+  --color-surface2: #261f3d;
+  --color-line: #3a3352;
+  --color-ink: #ece9f5;
+  --color-ink2: #b7afcb;
+  --color-ink3: #8a82a0;
+  --color-neon: #8b5cf6;
+  --color-neon2: #6d4fc0;
+  --color-aqua: #41e0d0;
+  --color-rose: #e072b0;
+  --color-gold: #e0b341;
+
+  --radius-card: 16px;
+
+  /* 入场动画：给 hero 与各区块用，纯 CSS，不引任何库 */
+  --animate-fade-up: fade-up 0.7s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+
+  /* 不引 webfont：只用系统字体栈，国内也能秒开 */
+  /* 三种角色：衬线做标题（呼应 App 阅读正文用的宋体系）、无衬线做正文、等宽做"图注式"小标签。
+     全部系统字体，不用 webfont（国内 CDN 不稳）。 */
+  --font-sans: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, -apple-system,
+    "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  --font-display: "Noto Serif SC", "Source Han Serif SC", "Songti SC", STSong, SimSun, Georgia,
+    "Times New Roman", serif;
+
+  --font-mono: ui-monospace, SFMono-Regular, "Cascadia Mono", Menlo, Consolas, "Courier New", monospace;
+}
+
+/* 线框地球：经线的 rx 周期性扫动（78→4→78），两条错开半相位，看起来就是球在自转。
+   纬线不动。rx 是可动画的 SVG 几何属性；不支持的浏览器只会保持静态，不会出错。 */
+@keyframes globe-meridian {
+  0%,
+  100% {
+    rx: 78px;
+  }
+  25% {
+    rx: 56px;
+  }
+  50% {
+    rx: 4px;
+  }
+  75% {
+    rx: 56px;
+  }
+}
+
+.globe-meridian {
+  animation: globe-meridian 14s linear infinite;
+}
+
+.globe-meridian-b {
+  animation-delay: -7s;
+}
+
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 尊重系统的「减少动态效果」设置 */
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-up,
+  .globe-meridian {
+    animation: none;
+  }
+}

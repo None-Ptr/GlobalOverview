@@ -31,6 +31,10 @@ class _QuizScreenState extends ConsumerState<QuizScreen> {
   final Map<int, TextEditingController> _inputs = {};
   final Set<int> _debounce = {};
 
+  /// 满分彩蛋（随机一句，避免每次一样）。
+  static const _eggs = ['出神入化！', '满分！这就是手感', '滴水不漏，漂亮', '满分达成，见闻满溢'];
+  String _egg() => _eggs[DateTime.now().millisecond % _eggs.length];
+
   @override
   void initState() {
     super.initState();
@@ -141,18 +145,60 @@ class _QuizScreenState extends ConsumerState<QuizScreen> {
       setState(() => _result = true);
 
       final wrongCount = graded.length - ok;
-      var content = '正确 $ok / ${res.results.length}';
-      if (res.pending > 0) content += '，${res.pending} 题判分未完成，可单独重判';
-      if (wrongCount > 0) content += '，错题已入错题本';
+      final perfect = graded.isNotEmpty && ok == graded.length;
+      final xp = rec.xpGained;
       // 放进结果对话框而不是 SnackBar：交卷后可能立刻跳到错题本，SnackBar 会被盖掉。
-      if (rec.newBadges.isNotEmpty) {
-        content += '\n\n解锁成就：${rec.newBadges.map((b) => b.label).join('、')}';
-      }
+      final content = Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('正确 $ok / ${res.results.length}${res.pending > 0 ? '，${res.pending} 题判分未完成' : ''}'),
+          if (wrongCount > 0)
+            const Padding(
+              padding: EdgeInsets.only(top: Go.sp1),
+              child: Text('错题已入错题本', style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
+            ),
+          if (xp > 0)
+            Padding(
+              padding: const EdgeInsets.only(top: Go.sp4),
+              child: TweenAnimationBuilder<int>(
+                tween: IntTween(begin: 0, end: xp),
+                duration: const Duration(milliseconds: 700),
+                curve: Curves.easeOutCubic,
+                builder: (c, v, _) => Row(
+                  children: [
+                    const GoIcon('star', size: 18, color: Go.secondary),
+                    const SizedBox(width: Go.sp1),
+                    Text('+$v 见闻', style: const TextStyle(fontSize: Go.fsTitle, fontWeight: FontWeight.w700, color: Go.secondary)),
+                    const Spacer(),
+                    if (rec.streak > 0)
+                      Text('🔥 续航 ${rec.streak} 天', style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
+                  ],
+                ),
+              ),
+            ),
+          if (rec.levelUp)
+            Padding(
+              padding: const EdgeInsets.only(top: Go.sp2),
+              child: Text('升级！环球等级 Lv.${rec.level}', style: const TextStyle(fontSize: Go.fsBodySm, fontWeight: FontWeight.w600, color: Go.primary)),
+            ),
+          if (perfect)
+            Padding(
+              padding: const EdgeInsets.only(top: Go.sp2),
+              child: Text(_egg(), style: const TextStyle(fontSize: Go.fsBodySm, fontWeight: FontWeight.w600, color: Go.secondary)),
+            ),
+          if (rec.newBadges.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: Go.sp2),
+              child: Text('解锁成就：${rec.newBadges.map((b) => b.label).join('、')}'),
+            ),
+        ],
+      );
       final viewWrong = await showDialog<bool>(
         context: context,
         builder: (c) => AlertDialog(
           title: const Text('判分完成'),
-          content: Text(content),
+          content: content,
           actions: [
             if (wrongCount > 0) TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('留在本页')),
             TextButton(onPressed: () => Navigator.pop(c, true), child: Text(wrongCount > 0 ? '查看错题' : '好')),

@@ -132,7 +132,7 @@ class _ModelFormScreenState extends ConsumerState<ModelFormScreen> {
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  GoIcon(_showKey ? 'lock' : 'search', size: 15, color: Go.primary),
+                                  GoIcon(_showKey ? 'eye-off' : 'eye', size: 15, color: Go.primary),
                                   const SizedBox(width: Go.sp2),
                                   Text(_showKey ? '隐藏密钥' : '显示密钥', style: const TextStyle(fontSize: Go.fsBodySm, color: Go.primary)),
                                 ],

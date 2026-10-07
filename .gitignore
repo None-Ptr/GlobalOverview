@@ -5,6 +5,7 @@
 *.pyc
 *.DS_Store
 analysis_options.yaml
+.workbuddy
 
 # Generated files
 *.generated.*

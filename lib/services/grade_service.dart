@@ -12,17 +12,29 @@ class GradeService {
   Future<({int pending, List<Map<String, dynamic>> results})> gradeBatch(List<Map<String, dynamic>> items) async {
     var pending = 0;
     final results = <Map<String, dynamic>>[];
+
+    // 一次取回全部题目，避免每题查一次库；按 id 分批，规避绑定变量上限（重判大错题本时 id 很多）。
+    final ids = items.map((e) => e['questionId'] as int).toList();
+    final qById = <int, Map<String, dynamic>>{};
+    for (final chunk in chunked(ids)) {
+      final ph = List.filled(chunk.length, '?').join(',');
+      final rows = await _db.select('SELECT id, answers, gradeMode FROM questions WHERE id IN ($ph)', chunk);
+      for (final r in rows) {
+        qById[r['id'] as int] = r;
+      }
+    }
+
     for (final it in items) {
       final qid = it['questionId'] as int;
       final finalAns = (it['final'] ?? '') as String;
       try {
-        final qRows = await _db.select('SELECT answers, gradeMode FROM questions WHERE id = ?', [qid]);
-        if (qRows.isEmpty) {
+        final qRow = qById[qid];
+        if (qRow == null) {
           pending++;
           results.add({'questionId': qid, 'correct': false, 'comment': '', 'status': 'pending'});
           continue;
         }
-        final expected = (jsonDecode(qRows.first['answers'] as String? ?? '[]') as List).map((e) => '$e').toList();
+        final expected = (jsonDecode(qRow['answers'] as String? ?? '[]') as List).map((e) => '$e').toList();
         final a = finalAns.trim();
         bool? directCorrect;
         if (a.isNotEmpty) {
@@ -51,7 +63,10 @@ class GradeService {
     return (pending: pending, results: results);
   }
 
-  String norm(String s) => s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9 ]'), '').replaceAll(RegExp(r'\s+'), ' ').trim();
+  static final _reNonAlnum = RegExp(r'[^a-z0-9 ]');
+  static final _reSpaceRun = RegExp(r'\s+');
+
+  String norm(String s) => s.toLowerCase().replaceAll(_reNonAlnum, '').replaceAll(_reSpaceRun, ' ').trim();
 
   Future<Map<String, dynamic>> grade(String expected, String answer) async {
     final a = answer.trim();

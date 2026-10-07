@@ -68,6 +68,8 @@ class _ReviewScreenState extends ConsumerState<ReviewScreen> {
     if (_idx >= _cards.length) return;
     await ref.read(vocabProvider).scheduleReview('${_cards[_idx]['head']}', g);
     ref.read(vocabRevisionProvider.notifier).bump();
+    ref.read(habitProvider).awardVocabReview(); // 复习一个词 → 见闻 +2（每日封顶）
+    ref.read(habitRevisionProvider.notifier).bump();
     _idx++;
     if (_idx >= _cards.length) {
       await _load();

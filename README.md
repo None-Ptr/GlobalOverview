@@ -164,10 +164,9 @@
 ```text
 lib/
   main.dart                  入口、主题、路由与 5 个 Tab（首页/阅读/计划/词汇/我的）
-  app_info.dart              版本号
   models/models.dart         数据模型
   providers/providers.dart   Riverpod 提供者 + 各页面刷新信号
-  services/                  17 个服务：RSS / 正文抽取 / 题库 / 判分 / 词汇 / 复习 / 翻译
+  services/                  21 个服务：RSS / 正文抽取 / 题库 / 判分 / 词汇 / 复习 / 翻译 / 应用内更新
                              / TTS / 导出 / 成就打卡 / 配置…
   screens/                   12 个页面
   theme/                     设计 token（Go.*）与深浅主题

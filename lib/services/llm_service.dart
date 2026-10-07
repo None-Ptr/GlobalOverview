@@ -8,6 +8,17 @@ class LlmService {
   final AppConfigService _cfg;
   LlmService(this._http, this._cfg);
 
+  /// 送进 prompt 的正文上限（字符）。约等于 3k token 的英文，超出部分多数模型会直接报错或静默截断。
+  static const int maxPromptChars = 12000;
+
+  /// 截断过长正文。优先在段落边界断开，避免只切半句话导致题目失真。
+  static String clipArticle(String text, {int limit = maxPromptChars}) {
+    if (text.length <= limit) return text;
+    final cut = text.substring(0, limit);
+    final br = cut.lastIndexOf('\n');
+    return (br > limit ~/ 2 ? cut.substring(0, br) : cut).trim();
+  }
+
   Future<String> chat(String system, String user, {double temperature = 0.7}) async {
     final p = _cfg.currentProfile;
     final url = '${p.baseUrl}/chat/completions';

@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:global_overview/providers/providers.dart';
@@ -91,31 +90,9 @@ class _ExportScreenState extends ConsumerState<ExportScreen> {
     if (mounted) setState(() {});
   }
 
-  Future<List<Map<String, dynamic>>> _loadWrong() async {
-    final db = ref.read(dbProvider);
-    final questions = await db.select('SELECT * FROM questions ORDER BY id ASC');
-    final answers = await db.select('SELECT * FROM answers ORDER BY gradedAt DESC');
-    final latest = <int, Map<String, dynamic>>{};
-    for (final a in answers) {
-      latest.putIfAbsent(a['questionId'] as int, () => a);
-    }
-    final out = <Map<String, dynamic>>[];
-    for (final q in questions) {
-      final a = latest[q['id'] as int];
-      if (a == null) continue;
-      if ((a['wrong'] as int? ?? 0) != 1 && a['status'] != 'pending') continue;
-      List<dynamic> ans = [];
-      try {
-        ans = jsonDecode(q['answers'] as String? ?? '[]');
-      } catch (_) {}
-      List<dynamic> opts = [];
-      try {
-        opts = jsonDecode(q['options'] as String? ?? '[]');
-      } catch (_) {}
-      out.add({'id': q['id'], 'prompt': q['prompt'], 'options': opts, 'answerList': ans, 'analysis': q['analysis'], 'sourceQuote': q['sourceQuote'], 'final': a['final']});
-    }
-    return out;
-  }
+  Future<List<Map<String, dynamic>>> _loadWrong() =>
+      // 复用受限查询（每题最新作答，仅错题/待判），不再全表拉 questions + answers。
+      ref.read(quizProvider).loadWrongList();
 
   String _currentTitle() {
     if (_mode == 'wrong') return '错题本练习';

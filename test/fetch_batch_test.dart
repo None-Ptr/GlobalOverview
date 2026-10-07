@@ -131,7 +131,7 @@ void main() {
   });
 
   test('索引迁移脚本覆盖全部热路径', () {
-    expect(dbIndexStatements.length, 9);
+    expect(dbIndexStatements.length, 10);
     for (final s in dbIndexStatements) {
       expect(s, startsWith('CREATE INDEX IF NOT EXISTS '), reason: s);
     }

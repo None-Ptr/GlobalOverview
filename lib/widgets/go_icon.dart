@@ -1,28 +1,44 @@
 import 'package:flutter/material.dart';
 import 'package:global_overview/theme/go_tokens.dart';
 
-/// name → Material 图标映射，语义对齐原 `GoIcon.vue` 的 uni-icons 映射表。
+/// name → Material 图标映射。
+///
+/// 选型三原则（2026-10-07 全表重挑）：
+/// 1. **语义准**：图标要指向它标注的那件事（原先 `reading`/`words` 共用列表图标、
+///    `target` 用定位针、`copy` 用回形针、`brain` 用调色板都属此类错配）。
+/// 2. **风格统一**：默认走 Material 的 `_outlined` 线形族，与 App 的线描视觉一致；
+///    只有「勾选」「加号」这类需要笔画压过底色的才用实心。
+/// 3. **不重复**：同屏可能并列出现的语义必须给不同字形（如底部导航的 阅读/词汇）。
 IconData goIcon(String name) {
   switch (name) {
+    // —— 底部导航 ——
     case 'home':
       return Icons.home_outlined;
     case 'reading':
-      return Icons.format_list_bulleted;
+      return Icons.article_outlined; // 时文列表，与「词汇」区分
     case 'plan':
       return Icons.calendar_today_outlined;
     case 'words':
     case 'vocab':
-      return Icons.format_list_bulleted;
+      return Icons.menu_book_outlined; // 词汇本
     case 'mine':
       return Icons.person_outline;
+
+    // —— 习惯 / 成就 ——
     case 'trophy':
-      return Icons.military_tech_outlined;
+      return Icons.emoji_events_outlined;
     case 'flame':
-      return Icons.local_fire_department_outlined;
+      return Icons.local_fire_department_outlined; // 连续航行
     case 'lock':
       return Icons.lock_outline;
     case 'check':
       return Icons.check;
+    case 'quiz':
+      return Icons.quiz_outlined; // 测验/累计测验
+    case 'target':
+      return Icons.track_changes; // 目标
+
+    // —— 通用动作 ——
     case 'arrow-left':
       return Icons.arrow_back;
     case 'plus':
@@ -30,47 +46,64 @@ IconData goIcon(String name) {
     case 'menu':
       return Icons.menu;
     case 'bookmark':
+      return Icons.bookmark_border; // 加入计划
     case 'star':
-      return Icons.star_outline;
+      return Icons.star_border; // 收藏/见闻
     case 'settings':
       return Icons.settings_outlined;
-    case 'robot':
-      return Icons.chat_bubble_outline;
-    case 'sparkle':
-      return Icons.auto_awesome;
-    case 'trash':
-      return Icons.delete_outline;
-    case 'target':
-      return Icons.location_on_outlined;
     case 'search':
       return Icons.search;
-    case 'rss':
-      return Icons.rss_feed_outlined;
-    case 'book-check':
-      return Icons.check_box_outlined;
-    case 'alert':
-      return Icons.info_outline;
-    case 'book':
-    case 'book-open':
-      return Icons.edit_note;
     case 'refresh':
       return Icons.refresh;
-    case 'copy':
-      return Icons.attach_file;
-    case 'export':
-      return Icons.upload_outlined;
-    case 'brain':
-      return Icons.palette_outlined;
+    case 'trash':
+      return Icons.delete_outline;
+    case 'chevron-right':
+      return Icons.chevron_right;
+    case 'close':
+      return Icons.close;
+    case 'eye':
+      return Icons.visibility_outlined; // 显示密钥
+    case 'eye-off':
+      return Icons.visibility_off_outlined;
+
+    // —— 提醒 / 警示 ——
+    case 'bell':
+      return Icons.notifications_none; // 提醒开关
+    case 'bell-ring':
+      return Icons.notifications_active; // 立刻发一条
+    case 'clock':
+      return Icons.schedule; // 提醒时间
+    case 'warning':
+    case 'alert':
+      return Icons.error_outline;
+
+    // —— 内容 / AI ——
+    case 'robot':
+      return Icons.smart_toy_outlined;
+    case 'sparkle':
+      return Icons.auto_awesome;
+    case 'book':
+    case 'book-open':
+      return Icons.auto_stories_outlined;
+    case 'book-check':
+      return Icons.fact_check_outlined; // 错题本
+    case 'rss':
+      return Icons.rss_feed;
     case 'translate':
       return Icons.translate;
     case 'tts':
       return Icons.volume_up_outlined;
     case 'stop':
       return Icons.stop_circle_outlined;
-    case 'chevron-right':
-      return Icons.chevron_right;
-    case 'close':
-      return Icons.close;
+
+    // —— 数据 ——
+    case 'copy':
+      return Icons.content_copy;
+    case 'export':
+      return Icons.file_download_outlined;
+    case 'brain':
+      return Icons.psychology_outlined;
+
     default:
       return Icons.help_outline;
   }

@@ -56,4 +56,36 @@ void main() {
     final svc = _service(MockClient((req) async => http.Response(_reply('hello'), 200)));
     expect(await svc.chat('s', 'u'), 'hello');
   });
+
+  group('超长正文截断', () {
+    test('短文原样返回', () {
+      expect(LlmService.clipArticle('short'), 'short');
+    });
+
+    test('超长文被截到上限以内', () {
+      final long = List.filled(400, 'A sentence in the article body. ' * 20).join('\n\n');
+      expect(long.length, greaterThan(LlmService.maxPromptChars));
+      expect(LlmService.clipArticle(long).length, lessThanOrEqualTo(LlmService.maxPromptChars));
+    });
+
+    test('优先在段落边界断开，不切半句', () {
+      final para = 'This is a full sentence in a paragraph. ' * 20;
+      final long = List.filled(400, para).join('\n\n');
+      final out = LlmService.clipArticle(long);
+      // 断在段落边界上：结尾不该是空行（否则会多带一个截断标记进来）
+      expect(out.endsWith('\n'), isFalse);
+      expect(out.endsWith('\n\n'), isFalse);
+      // 截断后仍以完整句子收尾（句号结尾），而不是半个单词
+      expect(out.trimRight().endsWith('.'), isTrue);
+    });
+
+    test('没有换行的超长文本也能被截断', () {
+      expect(LlmService.clipArticle('a' * 50000).length, lessThanOrEqualTo(LlmService.maxPromptChars));
+    });
+
+    test('恰好等于上限时不动', () {
+      final exact = 'x' * LlmService.maxPromptChars;
+      expect(LlmService.clipArticle(exact), exact);
+    });
+  });
 }

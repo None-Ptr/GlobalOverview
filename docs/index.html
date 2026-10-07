@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GlobalOverview · 英语时文阅读与学习激励</title>
+    <meta
+      name="description"
+      content="RSS 时文阅读、点词沉淀、FSRS 间隔复习、13 类考试出题判分，外加一套「环球航行」学习激励。Android 免费无广告，数据只存在本地。"
+    />
+    <meta name="theme-color" content="#0e0a1a" />
+    <link rel="icon" href="icon.png" />
+    <link rel="apple-touch-icon" href="icon.png" />
+
+    <!-- 分享到微信/QQ 时的卡片。og:image 必须是绝对地址，Pages 上相对路径不会被识别 -->
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="GlobalOverview · 英语时文阅读与学习激励" />
+    <meta
+      property="og:description"
+      content="RSS 时文阅读 · 词汇 FSRS 复习 · 13 类考试出题判分 · 环球航行激励。Android 免费，数据只在本地。"
+    />
+    <meta property="og:url" content="https://none-ptr.github.io/GlobalOverview/" />
+    <meta property="og:image" content="https://none-ptr.github.io/GlobalOverview/icon.png" />
+    <meta name="twitter:card" content="summary" />
+
+    <link rel="stylesheet" href="style.css" />
+  </head>
+
+  <body class="bg-bg font-sans text-ink antialiased selection:bg-neon/30">
+    <!-- 背景：两团光晕。其余装饰一律让给那颗球——它不是陪衬，是这页的主角 -->
+    <div class="pointer-events-none fixed inset-0 overflow-hidden" aria-hidden="true">
+      <div class="absolute -top-48 -left-40 h-[30rem] w-[30rem] rounded-full bg-neon/20 blur-[130px]"></div>
+      <div class="absolute top-40 -right-40 h-[24rem] w-[24rem] rounded-full bg-aqua/10 blur-[130px]"></div>
+    </div>
+
+    <main class="relative mx-auto max-w-5xl px-6 pb-24">
+      <!-- ================= Hero ================= -->
+      <header class="relative flex flex-col items-center pt-14 text-center sm:pt-20">
+        <!--
+          线框地球：Canvas 版（globe.js）移植自 App 的 GoGlobe——经纬网 + 陆地 + 城市光点 + 球缘辉光。
+          下面这张静态 SVG 是兜底：JS 取不到 canvas 或出错时它就留着，页面不会空一块。
+        -->
+        <div
+          class="pointer-events-none absolute -top-16 h-[420px] w-[420px] sm:h-[560px] sm:w-[560px]"
+          aria-hidden="true"
+        >
+          <svg
+            id="globe-static"
+            class="absolute inset-0 h-full w-full text-aqua opacity-[0.16]"
+            viewBox="0 0 200 200"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="0.6"
+          >
+          <circle cx="100" cy="100" r="78" />
+          <!-- 纬线：不动 -->
+          <ellipse cx="100" cy="100" rx="78" ry="28" />
+          <ellipse cx="100" cy="100" rx="78" ry="56" />
+          <!-- 经线：rx 周期性扫动，两条错开半相位 = 球在自转 -->
+            <ellipse class="globe-meridian" cx="100" cy="100" rx="28" ry="78" />
+            <ellipse class="globe-meridian globe-meridian-b" cx="100" cy="100" rx="56" ry="78" />
+          </svg>
+          <canvas id="globe-canvas" class="absolute inset-0 h-full w-full"></canvas>
+        </div>
+
+        <p class="animate-fade-up relative font-mono text-[11px] tracking-[0.32em] text-aqua">ANDROID · 免费 · 本地优先</p>
+
+        <img
+          src="icon.png"
+          width="88"
+          height="88"
+          alt="GlobalOverview 应用图标"
+          class="animate-fade-up relative mt-8 h-22 w-22 rounded-[22px] border border-line/70 shadow-[0_0_50px_-8px_rgba(139,92,246,0.65)] [animation-delay:60ms]"
+        />
+        <!-- 产品名是拉丁字标，用无衬线紧排；中文信息交给衬线，两套字体各司其职 -->
+        <h1
+          class="animate-fade-up mt-6 text-4xl font-extrabold tracking-tight [animation-delay:120ms] [text-shadow:0_0_44px_rgba(139,92,246,0.35)] sm:text-5xl"
+        >
+          GlobalOverview
+        </h1>
+        <p
+          class="animate-fade-up relative mt-4 max-w-xl font-display text-lg leading-relaxed text-ink2 [animation-delay:180ms] sm:text-xl"
+        >
+          英语时文阅读 + 学习激励：读得越多，
+          <span class="bg-gradient-to-r from-neon to-aqua bg-clip-text font-semibold text-transparent">环球等级越高</span>
+        </p>
+
+        <div
+          class="animate-fade-up mt-10 flex w-full flex-col items-center gap-3 [animation-delay:240ms] sm:w-auto sm:flex-row"
+        >
+          <a
+            href="https://github.com/None-Ptr/GlobalOverview/releases/latest/download/GlobalOverview.apk"
+            class="w-full rounded-full bg-gradient-to-r from-neon to-neon2 px-9 py-3.5 text-center text-sm font-bold text-white shadow-[0_14px_36px_-12px_rgba(139,92,246,1)] transition duration-200 hover:-translate-y-0.5 hover:brightness-110 sm:w-auto"
+            >下载 Android 版</a
+          >
+          <a
+            href="https://github.com/None-Ptr/GlobalOverview"
+            target="_blank"
+            rel="noopener"
+            class="w-full rounded-full border border-line bg-surface/60 px-9 py-3.5 text-center text-sm font-semibold text-ink backdrop-blur transition duration-200 hover:-translate-y-0.5 hover:bg-surface sm:w-auto"
+            >查看源码</a
+          >
+        </div>
+
+        <!-- 图注式小标签：等宽 + 大写字距，像海图上的注记 -->
+        <div
+          class="animate-fade-up mt-6 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 font-mono text-[11px] text-ink3 [animation-delay:300ms]"
+        >
+          <span id="ver">LATEST</span>
+          <span aria-hidden="true">/</span>
+          <span>ANDROID 8.0+</span>
+          <span aria-hidden="true">/</span>
+          <span>无广告 无账号</span>
+          <span aria-hidden="true">/</span>
+          <a
+            href="https://github.com/None-Ptr/GlobalOverview/releases/latest"
+            target="_blank"
+            rel="noopener"
+            class="text-ink2 underline decoration-line underline-offset-4 transition hover:text-aqua"
+            >更新日志</a
+          >
+        </div>
+
+        <!-- 实机展示：一台就够，不堆扇形排列 -->
+        <div class="animate-fade-up relative mt-16 [animation-delay:380ms]">
+          <div class="absolute inset-x-12 -bottom-8 h-28 rounded-full bg-neon/30 blur-[70px]"></div>
+          <div
+            class="relative mx-auto w-[258px] rounded-[40px] border-[6px] border-surface2 bg-bg p-1.5 shadow-[0_50px_90px_-40px_rgba(0,0,0,0.95)] sm:w-[340px]"
+          >
+            <img
+              src="screenshots/web/01_home.jpg"
+              width="480"
+              height="853"
+              alt="GlobalOverview 首页：今日航程与连续航行"
+              class="w-full rounded-[31px]"
+            />
+          </div>
+        </div>
+      </header>
+
+      <!-- ================= 四个模块 ================= -->
+      <section class="mt-28">
+        <p class="font-mono text-[11px] tracking-[0.32em] text-aqua">MODULES / 四个模块</p>
+        <h2 class="mt-3 font-display text-2xl font-bold leading-snug sm:text-3xl">读、记、考、坚持，都在一个 App 里</h2>
+        <p class="mt-3 max-w-2xl text-sm leading-relaxed text-ink2">
+          阅读是入口，词汇是沉淀，测验是检验，激励是让你明天还愿意打开它。四件事各自独立，又能接成一条回路。
+        </p>
+
+        <!-- 不用四张等大玻璃卡：改成带细分隔线的清单，安静一点，读起来像说明书 -->
+        <div class="mt-10 border-t border-line/50">
+          <article class="group grid gap-2 py-6 sm:grid-cols-[2.5rem_10rem_1fr] sm:gap-6 sm:py-7">
+            <div class="grid h-9 w-9 place-items-center rounded-lg bg-neon/15 font-display text-sm font-bold text-neon">读</div>
+            <h3 class="font-display text-lg font-bold">时文阅读</h3>
+            <p class="text-sm leading-relaxed text-ink2">订阅自己的 RSS 源，自动抽取正文；读一篇就攒一点见闻。</p>
+          </article>
+          <article class="group grid gap-2 border-t border-line/50 py-6 sm:grid-cols-[2.5rem_10rem_1fr] sm:gap-6 sm:py-7">
+            <div class="grid h-9 w-9 place-items-center rounded-lg bg-aqua/15 font-display text-sm font-bold text-aqua">词</div>
+            <h3 class="font-display text-lg font-bold">词汇复习</h3>
+            <p class="text-sm leading-relaxed text-ink2">正文里点词即沉淀，按 FSRS 间隔重复排期，句子也能一起收藏。</p>
+          </article>
+          <article class="group grid gap-2 border-t border-line/50 py-6 sm:grid-cols-[2.5rem_10rem_1fr] sm:gap-6 sm:py-7">
+            <div class="grid h-9 w-9 place-items-center rounded-lg bg-rose/15 font-display text-sm font-bold text-rose">题</div>
+            <h3 class="font-display text-lg font-bold">出题判分</h3>
+            <p class="text-sm leading-relaxed text-ink2">13 类考试难度自动出题，AI 与本地规则双重判分，错题自动归档。</p>
+          </article>
+          <article class="group grid gap-2 border-t border-line/50 py-6 sm:grid-cols-[2.5rem_10rem_1fr] sm:gap-6 sm:py-7">
+            <div class="grid h-9 w-9 place-items-center rounded-lg bg-gold/15 font-display text-sm font-bold text-gold">航</div>
+            <h3 class="font-display text-lg font-bold">环球航行</h3>
+            <p class="text-sm leading-relaxed text-ink2">每日航程、连续航行、护航与勋章，把「坚持」变成看得见的东西。</p>
+          </article>
+        </div>
+      </section>
+
+      <!-- ================= 截图 ================= -->
+      <section class="mt-28">
+        <p class="font-mono text-[11px] tracking-[0.32em] text-aqua">SCREENS / 界面</p>
+        <h2 class="mt-3 font-display text-2xl font-bold leading-snug sm:text-3xl">每一屏都在为「读下去」服务</h2>
+        <div class="mt-10 grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <figure>
+            <img
+              src="screenshots/web/02_reading.jpg"
+              width="480"
+              height="853"
+              alt="阅读列表"
+              class="w-full rounded-card border border-line/60 shadow-[0_24px_50px_-28px_rgba(0,0,0,0.95)]"
+            />
+            <figcaption class="mt-2 font-mono text-[11px] text-ink3">阅读 · 订阅源</figcaption>
+          </figure>
+          <figure>
+            <img
+              src="screenshots/web/03_article.jpg"
+              width="480"
+              height="853"
+              alt="正文页"
+              class="w-full rounded-card border border-line/60 shadow-[0_24px_50px_-28px_rgba(0,0,0,0.95)]"
+            />
+            <figcaption class="mt-2 font-mono text-[11px] text-ink3">正文 · 点词查义</figcaption>
+          </figure>
+          <figure>
+            <img
+              src="screenshots/web/04_wordcard.jpg"
+              width="480"
+              height="853"
+              alt="单词卡"
+              class="w-full rounded-card border border-line/60 shadow-[0_24px_50px_-28px_rgba(0,0,0,0.95)]"
+            />
+            <figcaption class="mt-2 font-mono text-[11px] text-ink3">单词卡 · 例句拆解</figcaption>
+          </figure>
+          <figure>
+            <img
+              src="screenshots/web/06_vocab.jpg"
+              width="480"
+              height="853"
+              loading="lazy"
+              decoding="async"
+              alt="词汇页"
+              class="w-full rounded-card border border-line/60 shadow-[0_24px_50px_-28px_rgba(0,0,0,0.95)]"
+            />
+            <figcaption class="mt-2 font-mono text-[11px] text-ink3">词汇 · 复习排期</figcaption>
+          </figure>
+          <figure>
+            <img
+              src="screenshots/web/08_quiz.jpg"
+              width="480"
+              height="853"
+              loading="lazy"
+              decoding="async"
+              alt="测验页"
+              class="w-full rounded-card border border-line/60 shadow-[0_24px_50px_-28px_rgba(0,0,0,0.95)]"
+            />
+            <figcaption class="mt-2 font-mono text-[11px] text-ink3">测验 · 出题与判分</figcaption>
+          </figure>
+          <figure>
+            <img
+              src="screenshots/web/05_plan.jpg"
+              width="480"
+              height="853"
+              loading="lazy"
+              decoding="async"
+              alt="计划页"
+              class="w-full rounded-card border border-line/60 shadow-[0_24px_50px_-28px_rgba(0,0,0,0.95)]"
+            />
+            <figcaption class="mt-2 font-mono text-[11px] text-ink3">计划 · 今天学什么</figcaption>
+          </figure>
+          <figure>
+            <img
+              src="screenshots/web/07_mine.jpg"
+              width="480"
+              height="853"
+              loading="lazy"
+              decoding="async"
+              alt="我的页"
+              class="w-full rounded-card border border-line/60 shadow-[0_24px_50px_-28px_rgba(0,0,0,0.95)]"
+            />
+            <figcaption class="mt-2 font-mono text-[11px] text-ink3">我的 · 模型与提醒</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <!-- ================= 第二处下载入口 ================= -->
+      <!-- 页面唯一的工作就是把人送到下载，所以滚到这里必须再给一次机会 -->
+      <section class="mt-28 rounded-card border border-line/60 bg-surface/40 px-6 py-12 text-center backdrop-blur">
+        <p class="font-mono text-[11px] tracking-[0.32em] text-aqua">GET STARTED</p>
+        <h2 class="mt-3 font-display text-2xl font-bold leading-snug sm:text-3xl">装上去，明天读一篇试试</h2>
+        <p class="mx-auto mt-3 max-w-md text-sm leading-relaxed text-ink2">
+          不用注册，不用联网同步。装上先订一个自己常看的源，剩下的它会替你排好。
+        </p>
+        <a
+          href="https://github.com/None-Ptr/GlobalOverview/releases/latest/download/GlobalOverview.apk"
+          class="mt-8 inline-block rounded-full bg-gradient-to-r from-neon to-neon2 px-9 py-3.5 text-sm font-bold text-white shadow-[0_14px_36px_-12px_rgba(139,92,246,1)] transition duration-200 hover:-translate-y-0.5 hover:brightness-110"
+          >下载 Android 版</a
+        >
+        <p class="mt-4 font-mono text-[11px] text-ink3">
+          <span id="ver2">LATEST</span> / 仅 ANDROID 8.0+ / 覆盖安装不丢数据
+        </p>
+      </section>
+
+      <!-- ================= 安装说明 ================= -->
+      <section class="mt-28">
+        <p class="font-mono text-[11px] tracking-[0.32em] text-aqua">NOTICE / 说明</p>
+        <h2 class="mt-3 font-display text-2xl font-bold leading-snug sm:text-3xl">安装前要知道的三件事</h2>
+        <div class="mt-10 border-t border-line/50">
+          <div class="grid gap-2 py-6 sm:grid-cols-[10rem_1fr] sm:gap-6 sm:py-7">
+            <p class="font-display text-base font-bold text-aqua">仅 Android</p>
+            <p class="text-sm leading-relaxed text-ink2">需要 Android 8.0 及以上。首次安装时系统会提示「允许安装未知应用」。</p>
+          </div>
+          <div class="grid gap-2 border-t border-line/50 py-6 sm:grid-cols-[10rem_1fr] sm:gap-6 sm:py-7">
+            <p class="font-display text-base font-bold text-aqua">覆盖安装不丢数据</p>
+            <p class="text-sm leading-relaxed text-ink2">新版本沿用同一签名，直接覆盖安装即可，学习记录与收藏都会保留。</p>
+          </div>
+          <div class="grid gap-2 border-t border-line/50 py-6 sm:grid-cols-[10rem_1fr] sm:gap-6 sm:py-7">
+            <p class="font-display text-base font-bold text-aqua">数据只在本地</p>
+            <p class="text-sm leading-relaxed text-ink2">无账号、无上传。只有你配置的大模型与翻译接口会收到请求。</p>
+          </div>
+        </div>
+      </section>
+
+      <footer class="mt-28 border-t border-line/40 pt-8">
+        <div class="flex flex-col items-start gap-4 font-mono text-[11px] text-ink3 sm:flex-row sm:items-center">
+          <img src="icon.png" width="28" height="28" alt="" class="h-7 w-7 rounded-lg opacity-70" aria-hidden="true" />
+          <p>MIT LICENSE / BY SHADOUBUSHI &amp; _NULL_PTR</p>
+          <a
+            href="https://github.com/None-Ptr/GlobalOverview"
+            target="_blank"
+            rel="noopener"
+            class="sm:ml-auto text-ink2 transition hover:text-aqua"
+            >GITHUB ↗</a
+          >
+        </div>
+      </footer>
+    </main>
+
+    <!-- 陆地数据（内联，避免 file:// 下 fetch 被 CORS 拦）+ 地球绘制 -->
+    <script src="land.js"></script>
+    <script src="globe.js"></script>
+
+    <script>
+      // 版本号默认向 api.github.com 取；拿不到就保持 LATEST，不报错也不留空白。
+      // api.github.com 带 CORS(*) 所以浏览器能直接请求；国内可能失败，故必须有兜底文案。
+      (function () {
+        var els = [document.getElementById('ver'), document.getElementById('ver2')].filter(Boolean);
+        if (!els.length || !window.fetch) return;
+        fetch('https://api.github.com/repos/None-Ptr/GlobalOverview/releases/latest', {
+          headers: { Accept: 'application/vnd.github+json' },
+        })
+          .then(function (r) {
+            return r.ok ? r.json() : Promise.reject();
+          })
+          .then(function (d) {
+            if (!d || !d.tag_name) return;
+            els.forEach(function (el) {
+              el.textContent = el.id === 'ver2' ? d.tag_name.toUpperCase() : d.tag_name;
+            });
+          })
+          .catch(function () {});
+      })();
+    </script>
+  </body>
+</html>

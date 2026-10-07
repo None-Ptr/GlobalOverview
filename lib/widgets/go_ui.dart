@@ -54,25 +54,48 @@ class GoGlowPulse extends StatefulWidget {
 class _GoGlowPulseState extends State<GoGlowPulse> with SingleTickerProviderStateMixin {
   late final _c = AnimationController(vsync: this, duration: const Duration(milliseconds: 1800))..repeat(reverse: true);
   late final _a = Tween<double>(begin: 0.4, end: 1.0).animate(CurvedAnimation(parent: _c, curve: Curves.easeInOut));
+
+  /// 每 [_paintEvery] 帧才重绘一次：1.8s 的脉冲 20fps 已足够顺滑。
+  /// 只动 alpha、固定 blurRadius（不改绘制边界/不重算模糊），再套 RepaintBoundary 隔离，
+  /// 避免激活项脉冲每帧把底部导航（含全宽 BackdropFilter 玻璃层）一起重绘。
+  static const _paintEvery = 3;
+  final ValueNotifier<int> _tick = ValueNotifier<int>(0);
+  int _frames = 0;
+
+  void _onFrame() {
+    if (++_frames % _paintEvery == 0) _tick.value++;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _c.addListener(_onFrame);
+  }
+
   @override
   void dispose() {
+    _c.removeListener(_onFrame);
+    _tick.dispose();
     _c.dispose();
     super.dispose();
   }
 
   @override
-  Widget build(BuildContext context) => AnimatedBuilder(
-        animation: _a,
-        builder: (ctx, anim) => DecoratedBox(
-          decoration: BoxDecoration(
-            boxShadow: [
-              BoxShadow(
-                color: widget.color.withValues(alpha: 0.55 * _a.value),
-                blurRadius: widget.blur * (0.6 + 0.4 * _a.value),
-              ),
-            ],
-          ),
+  Widget build(BuildContext context) => RepaintBoundary(
+        child: ValueListenableBuilder<int>(
+          valueListenable: _tick,
           child: widget.child,
+          builder: (ctx, _, child) => DecoratedBox(
+            decoration: BoxDecoration(
+              boxShadow: [
+                BoxShadow(
+                  color: widget.color.withValues(alpha: 0.55 * _a.value),
+                  blurRadius: widget.blur,
+                ),
+              ],
+            ),
+            child: child,
+          ),
         ),
       );
 }
@@ -703,20 +726,23 @@ class _PolySpinnerState extends State<PolySpinner> with TickerProviderStateMixin
 
   @override
   Widget build(BuildContext context) {
-    return SizedBox(
-      width: widget.size,
-      height: widget.size,
-      child: Stack(
-        children: [
-          RotationTransition(
-            turns: _cw,
-            child: CustomPaint(size: Size.square(widget.size), painter: _RingPainter(color: Go.primary, inset: 0, startQuarter: true)),
-          ),
-          RotationTransition(
-            turns: ReverseAnimation(_ccw),
-            child: CustomPaint(size: Size.square(widget.size), painter: _RingPainter(color: Go.tertiary, inset: widget.size * 0.16, startQuarter: false)),
-          ),
-        ],
+    // 两个环每帧旋转；用 RepaintBoundary 把重绘限制在这个小方块内。
+    return RepaintBoundary(
+      child: SizedBox(
+        width: widget.size,
+        height: widget.size,
+        child: Stack(
+          children: [
+            RotationTransition(
+              turns: _cw,
+              child: CustomPaint(size: Size.square(widget.size), painter: _RingPainter(color: Go.primary, inset: 0, startQuarter: true)),
+            ),
+            RotationTransition(
+              turns: ReverseAnimation(_ccw),
+              child: CustomPaint(size: Size.square(widget.size), painter: _RingPainter(color: Go.tertiary, inset: widget.size * 0.16, startQuarter: false)),
+            ),
+          ],
+        ),
       ),
     );
   }

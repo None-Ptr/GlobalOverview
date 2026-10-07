@@ -32,15 +32,68 @@ class QuizService {
   }
 
   Future<List<Map<String, dynamic>>> loadSet(int setId) async {
-    final rows = await _db.select('SELECT * FROM questions WHERE setId = ? ORDER BY id ASC', [setId]);
+    final rows = await _db.select(
+        'SELECT id, setId, type, gradeMode, prompt, options, answers, analysis, sourceQuote FROM questions WHERE setId = ? ORDER BY id ASC',
+        [setId]);
     return _mapQuestions(rows);
   }
 
   Future<List<Map<String, dynamic>>> loadQuestionsByIds(List<int> ids) async {
     if (ids.isEmpty) return [];
-    final ph = ids.map((_) => '?').join(',');
-    final rows = await _db.select('SELECT * FROM questions WHERE id IN ($ph) ORDER BY id ASC', ids);
+    // 分批查，规避 SQLite 绑定变量上限（「全部重做」大错题本会传入上千个 id）；
+    // 分批后结果需重新按 id ASC 排序，保持与原 ORDER BY id ASC 一致。
+    final rows = <Map<String, dynamic>>[];
+    for (final chunk in chunked(ids)) {
+      final ph = List.filled(chunk.length, '?').join(',');
+      rows.addAll(await _db.select(
+          'SELECT id, setId, type, gradeMode, prompt, options, answers, analysis, sourceQuote FROM questions WHERE id IN ($ph) ORDER BY id ASC',
+          chunk));
+    }
+    rows.sort((a, b) => (a['id'] as int).compareTo(b['id'] as int));
     return _mapQuestions(rows);
+  }
+
+  /// 错题本 / 错题导出共用：每题取最新一次作答，仅保留 `wrong = 1` 或 `status = 'pending'` 的题。
+  ///
+  /// 旧实现是 `SELECT * FROM questions` + `SELECT * FROM answers` 两张全表拉进内存再 join，
+  /// 而 questions / answers 只增不减，重度用户会逼近 Android CursorWindow 上限，且 `SELECT *`
+  /// 会把 `draft` / `options` / `sourceQuote` 等大字段一并拖进来。这里改成一条受限 JOIN，
+  /// 结果行数由「错题数」决定，而不是「题目总数 + 作答总数」。
+  Future<List<Map<String, dynamic>>> loadWrongList() async {
+    final rows = await _db.select(
+      'SELECT q.id AS id, q.type AS type, q.prompt AS prompt, q.options AS options, '
+      'q.answers AS answers, q.analysis AS analysis, q.sourceQuote AS sourceQuote, '
+      'a.final AS final, a.comment AS comment, a.status AS status, a.gradedAt AS gradedAt '
+      'FROM questions q '
+      'JOIN answers a ON a.questionId = q.id '
+      'JOIN (SELECT questionId, MAX(gradedAt) AS g FROM answers GROUP BY questionId) m '
+      '  ON m.questionId = a.questionId AND m.g = a.gradedAt '
+      "WHERE a.wrong = 1 OR a.status = 'pending' "
+      'ORDER BY q.id ASC',
+    );
+    return rows.map((r) {
+      List<dynamic> opts = [];
+      List<dynamic> ans = [];
+      try {
+        if (r['options'] != null) opts = jsonDecode(r['options'] as String);
+      } catch (_) {}
+      try {
+        if (r['answers'] != null) ans = jsonDecode(r['answers'] as String);
+      } catch (_) {}
+      return <String, dynamic>{
+        'id': r['id'],
+        'type': r['type'],
+        'prompt': r['prompt'],
+        'options': opts,
+        'answerList': ans,
+        'analysis': r['analysis'],
+        'sourceQuote': r['sourceQuote'],
+        'final': r['final'],
+        'comment': r['comment'],
+        'status': r['status'] ?? 'graded',
+        'gradedAt': r['gradedAt'],
+      };
+    }).toList();
   }
 
   /// 考试档位（对齐原 quiz.js 的 EXAM_MAP）：value 为出题约束描述，key 用作档位标识。
@@ -86,7 +139,8 @@ class QuizService {
     final prompt =
         'Based on the article, create $count ${info['label']} questions. ${info['prompt']}\nReturn a JSON array: [{"type":"$type","prompt":"","options":[] (only for choice/match/tf),"answers":[],"analysis":""}].';
     final res = await _llm.structured(
-        'You are an English exam generator for Chinese high-school / IELTS learners.', '$prompt\n\nARTICLE:\n$articleText');
+        'You are an English exam generator for Chinese high-school / IELTS learners.',
+        '$prompt\n\nARTICLE:\n${LlmService.clipArticle(articleText)}');
     if (res is List) return res.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
     if (res is Map && res['questions'] is List) {
       return (res['questions'] as List).whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();

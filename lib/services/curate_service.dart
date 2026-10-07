@@ -9,7 +9,7 @@ class CurateService {
     final text = blocks.where((b) => b.type == 'p').map((b) => b.text ?? '').join('\n\n');
     final prompt =
         'Rewrite the following English passage for a Chinese learner: keep core meaning, trim redundancy, keep it readable. ${focus != null ? "Focus: $focus." : ""} Return JSON array of paragraph strings (no images).';
-    final res = await _llm.structured('You are an editor that curates English news for learners.', '$prompt\n\nTEXT:\n$text');
+    final res = await _llm.structured('You are an editor that curates English news for learners.', '$prompt\n\nTEXT:\n${LlmService.clipArticle(text)}');
     List<String> paras = [];
     if (res is List) {
       paras = res.whereType<String>().toList();

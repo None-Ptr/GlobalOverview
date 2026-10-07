@@ -25,10 +25,27 @@ class ExtractService {
     }
     candidates.add(doc.body ?? doc.documentElement!);
 
+    // 原先对每个候选都querySelectorAll('p') 重算一遍，div 多的页面上是 O(候选数 × 段落数)。
+    // 改成只遍历一次段落，把长度记到它各级祖先上；扣分项同理。
+    // 语义与原来一致：得分 = Σ(长度≥25 的后代段落长度) - 20 × 后代 <a> 数。
+    final scores = <Element, int>{};
+    for (final p in doc.querySelectorAll('p')) {
+      final len = p.text.trim().length;
+      if (len < 25) continue;
+      for (final anc in _selfAndAncestors(p)) {
+        scores[anc] = (scores[anc] ?? 0) + len;
+      }
+    }
+    for (final a in doc.querySelectorAll('a')) {
+      for (final anc in _selfAndAncestors(a)) {
+        scores[anc] = (scores[anc] ?? 0) - 20;
+      }
+    }
+
     Element? best;
     var bestScore = -1;
     for (final el in candidates) {
-      final score = _score(el);
+      final score = scores[el] ?? 0;
       if (score > bestScore) {
         bestScore = score;
         best = el;
@@ -67,15 +84,13 @@ class ExtractService {
     return ExtractResult(title: title, author: author, blocks: blocks, plainText: plain, wordCount: wordCount);
   }
 
-  int _score(Element el) {
-    var score = 0;
-    for (final p in el.querySelectorAll('p')) {
-      final len = p.text.trim().length;
-      if (len < 25) continue;
-      score += len;
+  /// 元素自身及其所有祖先（到 document 为止）。
+  Iterable<Element> _selfAndAncestors(Element el) sync* {
+    Element? cur = el;
+    while (cur != null) {
+      yield cur;
+      cur = cur.parent;
     }
-    score -= el.querySelectorAll('a').length * 20;
-    return score;
   }
 
   bool _isBoilerplate(String text) {
@@ -119,8 +134,7 @@ class ExtractService {
     return sel?.attributes['content']?.trim();
   }
 
-  int _countWords(String text) {
-    final en = RegExp(r'[A-Za-z]+').allMatches(text).length;
-    return en;
-  }
+  static final _reWord = RegExp(r'[A-Za-z]+');
+
+  int _countWords(String text) => _reWord.allMatches(text).length;
 }

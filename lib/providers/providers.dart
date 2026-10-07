@@ -15,6 +15,9 @@ import 'package:global_overview/services/habit_service.dart';
 import 'package:global_overview/services/export_service.dart';
 import 'package:global_overview/services/feeds_service.dart';
 import 'package:global_overview/services/curate_service.dart';
+import 'package:global_overview/services/notification_service.dart';
+import 'package:global_overview/services/update_controller.dart';
+import 'package:global_overview/services/update_service.dart';
 import 'package:global_overview/services/word_service.dart';
 
 final dbProvider = Provider((ref) => DbService());
@@ -31,6 +34,10 @@ final gradeProvider = Provider((ref) => GradeService(ref.watch(llmProvider), ref
 final quizProvider = Provider((ref) => QuizService(ref.watch(llmProvider), ref.watch(dbProvider)));
 final vocabProvider = Provider((ref) => VocabService(ref.watch(dbProvider), ref.watch(llmProvider)));
 final habitProvider = Provider((ref) => HabitService(ref.watch(dbProvider)));
+final notificationProvider = Provider((ref) => NotificationService());
+final updateServiceProvider = Provider((ref) => UpdateService());
+/// 应用内更新的界面状态（检查 / 下载 / 安装），由「我的 → 关于」与更新卡片共用。
+final updateProvider = ChangeNotifierProvider<UpdateController>((ref) => UpdateController(ref.watch(updateServiceProvider)));
 final exportProvider = Provider((ref) => ExportService());
 final feedsProvider = Provider((ref) => FeedsService(ref.watch(dbProvider), ref.watch(rssProvider), ref.watch(httpProvider)));
 final curateProvider = Provider((ref) => CurateService(ref.watch(llmProvider)));

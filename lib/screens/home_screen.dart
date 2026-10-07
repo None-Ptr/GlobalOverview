@@ -12,20 +12,60 @@ class HomeScreen extends ConsumerStatefulWidget {
   ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends ConsumerState<HomeScreen> {
+class _HomeScreenState extends ConsumerState<HomeScreen> with WidgetsBindingObserver {
   HabitState? _s;
+  bool _noticeShown = false;
   static const _catOrder = ['streak', 'total', 'accuracy', 'perfect', 'over'];
-  static const _goalOptions = [1, 2, 3, 5];
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _refresh());
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  /// 回到前台时重排提醒：设备改过系统时间、或用户刚在设置里授予精确闹钟权限，
+  /// 都会让已排的闹钟失效，重排一次最稳妥（`apply` 幂等）。
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _refresh();
   }
 
   Future<void> _refresh() async {
     final s = await ref.read(habitProvider).getState();
     if (mounted) setState(() => _s = s);
+    // 同步本地提醒（幂等；测试环境内部短路）。达标后航程预警自动顺延到明天。
+    final notif = ref.read(notificationProvider);
+    final ns = await notif.loadSettings();
+    await notif.apply(enabled: ns.enabled, hour: ns.hour, minute: ns.minute, doneToday: s.isTodayDone, streak: s.streak);
+    if (!_noticeShown) {
+      _noticeShown = true;
+      final show = await ref.read(habitProvider).consumeUpgradeNotice();
+      if (show && mounted) _showUpgradeNotice();
+    }
+  }
+
+  /// 口径升级说明：达标从“测验次数”改为“见闻”。老用户航程已清零，必须明确告知，
+  /// 否则会被当成 bug、白白流失用户。
+  void _showUpgradeNotice() {
+    showDialog<void>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('学习规则升级'),
+        content: const Text(
+          '现在用「见闻」统一记录学习：读完文章、复习单词、交卷、收藏都会攒见闻，'
+          '当日见闻达到目标就算达标。\n\n'
+          '由于达标口径从“测验次数”改成了“见闻”，历史连续记录已按新规则重新开始，感谢理解！',
+        ),
+        actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('知道了'))],
+      ),
+    );
   }
 
   String get _greet {
@@ -85,7 +125,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
             ),
             const SizedBox(height: Go.sp4),
             const Text(
-              '每天做几次测验算达标？',
+              '每天攒多少见闻算达标？',
               style: TextStyle(
                 fontSize: Go.fsTitle,
                 fontWeight: FontWeight.w600,
@@ -98,7 +138,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
               runSpacing: Go.sp3,
               alignment: WrapAlignment.center,
               children: [
-                for (final n in _goalOptions)
+                for (final n in HabitService.goalOptions)
                   GestureDetector(
                     onTap: () {
                       Navigator.pop(c);
@@ -117,7 +157,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         ),
                       ),
                       child: Text(
-                        '$n 次',
+                        '$n 见闻',
                         style: TextStyle(
                           fontSize: Go.fsBodySm,
                           fontWeight: FontWeight.w500,
@@ -166,15 +206,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                           spacing: Go.sp4,
                           children: [
                             _hero(s),
-                            _goalCard(s),
+                            _questCard(s),
+                            _streakCard(s),
                             _statsCard(s),
+                            _compareCard(s),
                             _badgesCard(s),
                             Padding(
                               padding: const EdgeInsets.only(top: Go.sp4),
                               child: SizedBox(
                                 height: Go.r(96),
                                 child: GoBtn(
-                                  label: '去做测验 →',
+                                  label: '去学习 →',
                                   block: true,
                                   onTap: () => ref
                                       .read(tabIndexProvider.notifier)
@@ -194,12 +236,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     );
   }
 
-  double _pct(int today, int goal) =>
-      goal <= 0 ? 0 : (today / goal * 100).clamp(0, 100).toDouble();
-
   Widget _hero(HabitState s) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: Go.sp6, vertical: Go.sp8),
+      padding: const EdgeInsets.symmetric(horizontal: Go.sp6, vertical: Go.sp6),
       decoration: BoxDecoration(
         gradient: const LinearGradient(
           begin: Alignment.topLeft,
@@ -211,77 +250,207 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         boxShadow: Go.glassShadow,
       ),
       child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            _greet,
-            style: const TextStyle(
-              fontSize: Go.fsMeta,
-              color: Go.onSurface3,
-              letterSpacing: 0.6,
+          Row(
+            children: [
+              Text(_greet, style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3, letterSpacing: 0.6)),
+              const Spacer(),
+              GestureDetector(
+                onTap: () => _openGoalSheet(s),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(color: Go.primary90, borderRadius: BorderRadius.circular(Go.rFull)),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text('目标 ${s.goalXp}', style: const TextStyle(fontSize: Go.fsMeta, fontWeight: FontWeight.w500, color: Go.primary)),
+                      const SizedBox(width: Go.sp1),
+                      const GoIcon('settings', size: 15, color: Go.primary),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: Go.sp4),
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: Go.sp3, vertical: 6),
+                decoration: BoxDecoration(
+                  gradient: const LinearGradient(colors: [Go.primary, Go.secondary]),
+                  borderRadius: BorderRadius.circular(Go.rFull),
+                ),
+                child: Text('环球 Lv.${s.level}', style: const TextStyle(fontSize: Go.fsBodySm, fontWeight: FontWeight.w700, color: Go.onPrimary)),
+              ),
+              const SizedBox(width: Go.sp3),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text.rich(
+                      TextSpan(children: [
+                        const TextSpan(text: '见闻 ', style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
+                        TextSpan(text: '${s.xpTotal}', style: const TextStyle(fontSize: Go.fsH2, fontWeight: FontWeight.w700, color: Go.onSurface, fontFamily: Go.fontMono)),
+                        TextSpan(text: ' / ${s.levelCeil}', style: const TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3, fontFamily: Go.fontMono)),
+                      ]),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: Go.sp2),
+                    GoProgress(value: s.levelPct),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: Go.sp5),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.baseline,
+            textBaseline: TextBaseline.alphabetic,
+            children: [
+              Text('${s.todayXp}', style: const TextStyle(fontSize: 30, fontWeight: FontWeight.w700, color: Go.primary, height: 1, fontFamily: Go.fontMono, letterSpacing: 0.5)),
+              Text(' / ${s.goalXp}', style: const TextStyle(fontSize: Go.fsH2, fontWeight: FontWeight.w600, color: Go.onSurface2, fontFamily: Go.fontMono)),
+              const SizedBox(width: Go.sp2),
+              const Expanded(
+                child: Text('今日见闻', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
+              ),
+              if (s.isTodayDone) _pill('已达标', color: Go.success),
+            ],
+          ),
+          const SizedBox(height: Go.sp3),
+          GoProgress(value: (s.goalXp <= 0 ? 0 : (s.todayXp / s.goalXp)).clamp(0, 1).toDouble()),
+        ],
+      ),
+    );
+  }
+
+  Widget _questCard(HabitState s) {
+    final quests = <({String icon, String label, int cur, int target})>[
+      (icon: 'reading', label: '读 1 篇', cur: s.questRead, target: HabitService.questReadTarget),
+      (icon: 'book', label: '复习 10 词', cur: s.questVocab, target: HabitService.questVocabTarget),
+      (icon: 'quiz', label: '交 1 次测验', cur: s.questQuiz, target: HabitService.questQuizTarget),
+    ];
+    return GoCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _cardHead(
+            '今日航程',
+            trailing: s.questBonus ? _pill('全清 +${HabitService.questBonus}', color: Go.success) : null,
+          ),
+          const SizedBox(height: Go.sp4),
+          for (final q in quests) _questRow(q.icon, q.label, q.cur, q.target),
+        ],
+      ),
+    );
+  }
+
+  Widget _questRow(String icon, String label, int cur, int target) {
+    final done = cur >= target;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Go.sp3),
+      child: Row(
+        children: [
+          Container(
+            width: 30,
+            height: 30,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: done ? Go.success.withValues(alpha: 0.18) : Go.surface2,
+              shape: BoxShape.circle,
+              border: Border.all(color: done ? Go.success.withValues(alpha: 0.5) : Go.outline, width: 0.5),
             ),
+            child: GoIcon(done ? 'check' : icon, size: 16, color: done ? Go.success : Go.onSurface3),
+          ),
+          const SizedBox(width: Go.sp3),
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                fontSize: Go.fsBodySm,
+                fontWeight: FontWeight.w500,
+                color: done ? Go.onSurface3 : Go.onSurface,
+                decoration: done ? TextDecoration.lineThrough : null,
+              ),
+            ),
+          ),
+          Text(
+            '${cur.clamp(0, target)}/$target',
+            style: TextStyle(fontSize: Go.fsMeta, color: done ? Go.success : Go.onSurface3, fontFamily: Go.fontMono),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _streakCard(HabitState s) {
+    return GoCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const GoIcon('flame', size: 26, color: Go.tertiary),
+              const SizedBox(width: Go.sp3),
+              Text('${s.streak}', style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w700, color: Go.primary, fontFamily: Go.fontMono)),
+              const SizedBox(width: Go.sp1),
+              const Expanded(
+                child: Text('天连续航行', maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: Go.fsBodySm, color: Go.onSurface2)),
+              ),
+              _pill('护航 ${s.freezesAvailable}/${HabitService.maxFreezes}', color: Go.secondary),
+            ],
           ),
           if (s.brokenYesterday)
-            Container(
-              margin: const EdgeInsets.only(top: Go.sp3),
-              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
-              decoration: BoxDecoration(
-                color: Go.warning.withValues(alpha: 0.16),
-                borderRadius: BorderRadius.circular(Go.rFull),
-              ),
-              child: const Row(
-                mainAxisSize: MainAxisSize.min,
+            Padding(
+              padding: const EdgeInsets.only(top: Go.sp4),
+              child: Row(
                 children: [
-                  GoIcon('alert', size: 14, color: Go.onWarning),
-                  SizedBox(width: Go.sp1),
-                  Text(
-                    '昨日断签，今天续上',
-                    style: TextStyle(
-                      fontSize: Go.fsMeta,
-                      fontWeight: FontWeight.w600,
-                      color: Go.onWarning,
+                  Expanded(
+                    child: Text(
+                      '昨天断航了，可花 ${HabitService.repairCost} 见闻补航',
+                      style: const TextStyle(fontSize: Go.fsMeta, color: Go.warning),
                     ),
                   ),
+                  GoBtn(label: '补航', onTap: _repair),
                 ],
               ),
+            )
+          else
+            const Padding(
+              padding: EdgeInsets.only(top: Go.sp3),
+              child: Text('护航可在断航当天自动保住航程', style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3)),
             ),
-          Padding(
-            padding: const EdgeInsets.only(top: Go.sp4),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic,
-              children: [
-                const GoIcon('flame', size: 28, color: Go.tertiary),
-                const SizedBox(width: Go.sp2),
-                Text(
-                  '${s.streak}',
-                  style: const TextStyle(
-                    fontSize: 44,
-                    fontWeight: FontWeight.w700,
-                    color: Go.primary,
-                    height: 1,
-                    fontFamily: Go.fontMono,
-                    letterSpacing: 1.0,
-                  ),
-                ),
-                const SizedBox(width: Go.sp2),
-                const Text(
-                  '天连续',
-                  style: TextStyle(
-                    fontSize: Go.fsH2,
-                    color: Go.onSurface2,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const Padding(
-            padding: EdgeInsets.only(top: Go.sp3),
-            child: Text(
-              '保持不断电，知识越积越厚',
-              style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3),
-            ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _repair() async {
+    final res = await ref.read(habitProvider).repairBrokenDay();
+    ref.read(habitRevisionProvider.notifier).bump();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(res.msg)));
+  }
+
+  Widget _compareCard(HabitState s) {
+    final diff = s.weekXp - s.lastWeekXp;
+    final label = diff > 0 ? '比上周 +$diff' : (diff < 0 ? '比上周 $diff' : '与上周持平');
+    return GoCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _cardHead('和过去的自己比', trailing: _pill(label, color: diff >= 0 ? Go.success : Go.warning)),
+          const SizedBox(height: Go.sp4),
+          Row(
+            children: [
+              Expanded(child: _statTile(('${s.weekXp}', '本周见闻'))),
+              const SizedBox(width: Go.sp3),
+              Expanded(child: _statTile(('${s.lastWeekXp}', '上周见闻'))),
+              const SizedBox(width: Go.sp3),
+              Expanded(child: _statTile(('${s.bestDayXp}', '单日最佳'))),
+            ],
           ),
         ],
       ),
@@ -294,115 +463,22 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
         GoIcon(icon, size: 17, color: Go.primary),
         const SizedBox(width: Go.sp2),
       ],
-      Text(
-        title,
-        style: const TextStyle(
-          fontSize: Go.fsTitle,
-          fontWeight: FontWeight.w600,
-          color: Go.onSurface,
+      Flexible(
+        child: Text(
+          title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(
+            fontSize: Go.fsTitle,
+            fontWeight: FontWeight.w600,
+            color: Go.onSurface,
+          ),
         ),
       ),
       const Spacer(),
       ?trailing,
     ],
   );
-
-  Widget _goalCard(HabitState s) {
-    final done = s.isTodayDone;
-    return GoCard(
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _cardHead(
-            '今日目标',
-            trailing: GestureDetector(
-              onTap: () => _openGoalSheet(s),
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                decoration: BoxDecoration(
-                  color: Go.primary90,
-                  borderRadius: BorderRadius.circular(Go.rFull),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      '每天 ${s.goal} 次',
-                      style: const TextStyle(
-                        fontSize: Go.fsMeta,
-                        fontWeight: FontWeight.w500,
-                        color: Go.primary,
-                      ),
-                    ),
-                    const SizedBox(width: Go.sp1),
-                    const GoIcon('settings', size: 15, color: Go.primary),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          const SizedBox(height: Go.sp4),
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.baseline,
-            textBaseline: TextBaseline.alphabetic,
-            children: [
-              Text(
-                '${s.todayCount}',
-                style: const TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.w700,
-                  color: Go.onSurface,
-                  height: 1,
-                  fontFamily: Go.fontMono,
-                  letterSpacing: 0.5,
-                ),
-              ),
-              const SizedBox(width: Go.sp1),
-              const Text(
-                '/',
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w600,
-                  color: Go.onSurface2,
-                ),
-              ),
-              const SizedBox(width: Go.sp1),
-              Text(
-                '${s.goal}',
-                style: const TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w600,
-                  color: Go.onSurface2,
-                  fontFamily: Go.fontMono,
-                  letterSpacing: 0.5,
-                ),
-              ),
-              const SizedBox(width: Go.sp1),
-              const Text(
-                '次测验',
-                style: TextStyle(fontSize: Go.fsMeta, color: Go.onSurface3),
-              ),
-            ],
-          ),
-          const SizedBox(height: Go.sp3),
-          GoProgress(value: _pct(s.todayCount, s.goal) / 100),
-          Padding(
-            padding: const EdgeInsets.only(top: Go.sp3),
-            child: Text(
-              done
-                  ? '今日已达标，明天见！'
-                  : '还差 ${(s.goal - s.todayCount).clamp(0, s.goal)} 次，去测一把',
-              style: TextStyle(
-                fontSize: Go.fsMeta,
-                color: done ? Go.success : Go.onSurface3,
-                fontWeight: done ? FontWeight.w600 : FontWeight.w400,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 
   Widget _statsCard(HabitState s) {
     final stats = [

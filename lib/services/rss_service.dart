@@ -11,6 +11,13 @@ class RssItem {
 }
 
 class RssService {
+  static final _reSpaceRun = RegExp(r'\s+');
+  static final _reRfc822 = RegExp(r'^(?:[A-Za-z]{3},\s*)?(\d{1,2})\s+([A-Za-z]{3})\s+(\d{2,4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([+-]\d{4}|[A-Za-z]{1,5})?\s*$');
+  static final _reTzNumeric = RegExp(r'^[+-]\d{4}$');
+  static final _reDecEntity = RegExp(r'&#(\d+);');
+  static final _reHexEntity = RegExp(r'&#x([0-9a-fA-F]+);');
+  static final _reNamedEntity = RegExp(r'&[a-zA-Z]+;');
+  static final _reTag = RegExp(r'<[^>]+>');
   final HttpService _http;
   RssService(this._http);
 
@@ -82,8 +89,8 @@ class RssService {
   DateTime? _parseDate(String input) {
     final iso = DateTime.tryParse(input);
     if (iso != null) return iso;
-    final s = input.replaceAll(RegExp(r'\s+'), ' ').trim();
-    final m = RegExp(r'^(?:[A-Za-z]{3},\s*)?(\d{1,2})\s+([A-Za-z]{3})\s+(\d{2,4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([+-]\d{4}|[A-Za-z]{1,5})?\s*$')
+    final s = input.replaceAll(_reSpaceRun, ' ').trim();
+    final m = _reRfc822
         .firstMatch(s);
     if (m == null) return null;
     final month = _months[m.group(2)!.toLowerCase()];
@@ -92,7 +99,7 @@ class RssService {
     if (year < 100) year += year < 70 ? 2000 : 1900;
     var offset = Duration.zero;
     final tz = m.group(7);
-    if (tz != null && RegExp(r'^[+-]\d{4}$').hasMatch(tz)) {
+    if (tz != null && _reTzNumeric.hasMatch(tz)) {
       final sign = tz.startsWith('-') ? -1 : 1;
       offset = Duration(hours: sign * int.parse(tz.substring(1, 3)), minutes: sign * int.parse(tz.substring(3, 5)));
     }
@@ -114,14 +121,14 @@ class RssService {
         .replaceAll('&quot;', '"')
         .replaceAll('&#39;', "'")
         .replaceAll('&apos;', "'");
-    s = s.replaceAllMapped(RegExp(r'&#(\d+);'), (m) => String.fromCharCode(int.parse(m[1]!)));
-    s = s.replaceAllMapped(RegExp(r'&#x([0-9a-fA-F]+);'), (m) => String.fromCharCode(int.parse(m[1]!, radix: 16)));
-    s = s.replaceAll(RegExp(r'&[a-zA-Z]+;'), ' ');
+    s = s.replaceAllMapped(_reDecEntity, (m) => String.fromCharCode(int.parse(m[1]!)));
+    s = s.replaceAllMapped(_reHexEntity, (m) => String.fromCharCode(int.parse(m[1]!, radix: 16)));
+    s = s.replaceAll(_reNamedEntity, ' ');
     return s.trim();
   }
 
   String _strip(String? html) {
     if (html == null) return '';
-    return html.replaceAll(RegExp(r'<[^>]+>'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
+    return html.replaceAll(_reTag, ' ').replaceAll(_reSpaceRun, ' ').trim();
   }
 }

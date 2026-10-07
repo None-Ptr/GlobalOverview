@@ -66,8 +66,8 @@ void main() {
   testWidgets('徽章格：未解锁保留类别图标并叠加锁标记', (tester) async {
     await _pump(tester, _allLocked);
     expect(find.byIcon(Icons.lock_outline), findsNWidgets(15));
-    // 累计测验 4 枚 + 分组标题 1 = 5 个 target 图标，未解锁也照常显示（不再整块换成锁）
-    expect(find.byIcon(Icons.location_on_outlined), findsNWidgets(5));
+    // 累计测验 4 枚 + 分组标题 1 + 今日任务里“测验”那行 = 6 个 quiz 图标
+    expect(find.byIcon(Icons.quiz_outlined), findsNWidgets(6));
     // 5 枚连续打卡徽章 + 分组标题 + hero 里的火苗 = 7
     expect(find.byIcon(Icons.local_fire_department_outlined), findsNWidgets(7));
   });

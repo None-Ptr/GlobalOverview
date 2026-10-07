@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:global_overview/providers/providers.dart';
@@ -29,47 +28,14 @@ class _WrongScreenState extends ConsumerState<WrongScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
-  List<dynamic> _safeParse(String? json) {
-    if (json == null) return [];
-    try {
-      final v = jsonDecode(json);
-      return v is List ? v : [];
-    } catch (_) {
-      return [];
-    }
-  }
-
   Future<void> _load() async {
     setState(() {
       _loading = true;
       _error = '';
     });
     try {
-      final db = ref.read(dbProvider);
-      final questions = await db.select('SELECT * FROM questions ORDER BY id ASC');
-      final answers = await db.select('SELECT * FROM answers ORDER BY gradedAt DESC');
-      final latestByQ = <int, Map<String, dynamic>>{};
-      for (final a in answers) {
-        latestByQ.putIfAbsent(a['questionId'] as int, () => a);
-      }
-      final out = <Map<String, dynamic>>[];
-      for (final q in questions) {
-        final latest = latestByQ[q['id'] as int];
-        if (latest == null) continue;
-        final isPending = latest['status'] == 'pending';
-        if ((latest['wrong'] as int? ?? 0) != 1 && !isPending) continue;
-        out.add({
-          'id': q['id'],
-          'type': q['type'],
-          'prompt': q['prompt'],
-          'analysis': q['analysis'],
-          'answerList': _safeParse(q['answers'] as String?),
-          'final': latest['final'],
-          'comment': latest['comment'],
-          'status': latest['status'] ?? 'graded',
-          'gradedAt': latest['gradedAt'],
-        });
-      }
+      // 复用受限查询（每题最新作答，仅错题/待判），不再全表拉 questions + answers。
+      final out = await ref.read(quizProvider).loadWrongList();
       out.sort((a, b) => (b['gradedAt'] as int? ?? 0).compareTo(a['gradedAt'] as int? ?? 0));
       if (mounted) setState(() => _list = out);
     } catch (e) {
