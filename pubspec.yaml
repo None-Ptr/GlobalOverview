@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 3.5.0+350
+version: 4.0.0+400
 
 environment:
   sdk: ^3.13.4
@@ -31,34 +31,34 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # The following adds the Cupertino Icons font to your application.
-  # Use with the CupertinoIcons class for iOS style icons.
-  cupertino_icons: ^1.0.8
   flutter_riverpod: ^3.4.3
   sqflite: ^2.4.4
   http: ^1.6.0
   xml: ^7.1.0
   html: ^0.15.7
-  flutter_tts: ^4.2.0
   printing: ^5.15.1
   pdf: ^3.11.1
   crypto: ^3.0.7
   shared_preferences: ^2.5.5
+  # The 2.5.x Android implementation loads libdartjni.so through package:jni,
+  # which fails to open on Android 9 devices. Stay on the MethodChannel build.
+  shared_preferences_android: 2.4.28
   path_provider: ^2.1.6
-  uuid: ^4.6.0
   flutter_secure_storage: ^11.2.0
   flutter_local_notifications: ^22.3.1
   timezone: ^0.11.1
   package_info_plus: ^10.2.2
   open_filex: ^4.7.0
   permission_handler: 12.0.0
+  tdesign_flutter: 1.1.0
+  url_launcher: 6.3.2
+  share_plus: ^13.3.1
+  web: ^1.1.2
+  audioplayers: ^6.8.1
+  sqflite_common_ffi_web: ^1.2.2
 
 dev_dependencies:
   flutter_test:
-    sdk: flutter
-  integration_test:
-    sdk: flutter
-  flutter_driver:
     sdk: flutter
 
   # The "flutter_lints" package below contains a set of recommended lints to
@@ -82,6 +82,15 @@ flutter:
 
   assets:
     - assets/geo/world_land.json
+    - assets/fonts/NotoSansSC-VF.ttf
+
+  fonts:
+    - family: Literata
+      fonts:
+        - asset: assets/fonts/Literata-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Literata-SemiBold.ttf
+          weight: 600
 
   # To add assets to your application, add an assets section, like this:
   # assets:
@@ -114,8 +123,26 @@ flutter:
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
 
+# Use the OS-provided SQLite on every native target instead of downloading a
+# prebuilt binary from GitHub (which is unreachable on some networks). The app
+# uses the native sqflite plugin on device; the ffi copy is only loaded on web,
+# where sqflite_common_ffi_web ships its own wasm. Windows names its DLL
+# winsqlite3.dll; every other target uses the usual libsqlite3 name.
+hooks:
+  user_defines:
+    sqlite3:
+      source: system
+      name:
+        windows: winsqlite3
+        default: sqlite3
+
 flutter_launcher_icons:
   android: "ic_launcher"
   ios: false
   image_path: "assets/icon/app_icon.png"
   min_sdk_android: 21
+  web:
+    generate: true
+    image_path: "assets/icon/app_icon.png"
+    background_color: "#F4F6F8"
+    theme_color: "#0052D9"

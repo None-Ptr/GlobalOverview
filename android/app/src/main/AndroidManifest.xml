@@ -71,11 +71,5 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
-        <!-- Android 11+（API 30+）包可见性：flutter_tts 需要声明 TTS 服务 intent
-             才能枚举/绑定系统 TTS 引擎（对应 TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE），
-             否则朗读会失败并提示需要在此声明。 -->
-        <intent>
-            <action android:name="android.intent.action.TTS_SERVICE"/>
-        </intent>
     </queries>
 </manifest>

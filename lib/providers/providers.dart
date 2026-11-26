@@ -4,7 +4,6 @@ import 'package:global_overview/services/db_service.dart';
 import 'package:global_overview/services/http_service.dart';
 import 'package:global_overview/services/app_config_service.dart';
 import 'package:global_overview/services/rss_service.dart';
-import 'package:global_overview/services/extract_service.dart';
 import 'package:global_overview/services/llm_service.dart';
 import 'package:global_overview/services/tts_service.dart';
 import 'package:global_overview/services/translate_service.dart';
@@ -13,12 +12,14 @@ import 'package:global_overview/services/quiz_service.dart';
 import 'package:global_overview/services/vocab_service.dart';
 import 'package:global_overview/services/habit_service.dart';
 import 'package:global_overview/services/export_service.dart';
-import 'package:global_overview/services/feeds_service.dart';
 import 'package:global_overview/services/curate_service.dart';
+import 'package:global_overview/services/feeds_service.dart';
 import 'package:global_overview/services/notification_service.dart';
 import 'package:global_overview/services/update_controller.dart';
 import 'package:global_overview/services/update_service.dart';
 import 'package:global_overview/services/word_service.dart';
+import 'package:global_overview/v4/services/image_cache.dart';
+import 'package:global_overview/v4/services/import_service.dart';
 
 final dbProvider = Provider((ref) => DbService());
 /// 这里用 read 而不是 watch：配置变更时不需要重建（HttpService 每次请求时才读配置），
@@ -26,9 +27,8 @@ final dbProvider = Provider((ref) => DbService());
 final httpProvider = Provider((ref) => HttpService(config: ref.read(appConfigProvider)));
 final appConfigProvider = ChangeNotifierProvider<AppConfigService>((ref) => AppConfigService());
 final rssProvider = Provider((ref) => RssService(ref.watch(httpProvider)));
-final extractProvider = Provider((ref) => ExtractService());
 final llmProvider = Provider((ref) => LlmService(ref.watch(httpProvider), ref.read(appConfigProvider)));
-final ttsProvider = Provider((ref) => TtsService());
+final ttsProvider = Provider((ref) => TtsService(ref.read(httpProvider), ref.read(appConfigProvider)));
 final translateProvider = Provider((ref) => TranslateService(ref.watch(httpProvider), ref.read(appConfigProvider), ref.watch(llmProvider)));
 final gradeProvider = Provider((ref) => GradeService(ref.watch(llmProvider), ref.watch(dbProvider)));
 final quizProvider = Provider((ref) => QuizService(ref.watch(llmProvider), ref.watch(dbProvider)));
@@ -41,7 +41,9 @@ final updateProvider = ChangeNotifierProvider<UpdateController>((ref) => UpdateC
 final exportProvider = Provider((ref) => ExportService());
 final feedsProvider = Provider((ref) => FeedsService(ref.watch(dbProvider), ref.watch(rssProvider), ref.watch(httpProvider)));
 final curateProvider = Provider((ref) => CurateService(ref.watch(llmProvider)));
+final importProvider = Provider((ref) => ImportService(ref.watch(dbProvider), ref.watch(httpProvider)));
 final wordProvider = Provider((ref) => WordService(ref.watch(dbProvider), ref.watch(translateProvider)));
+final imageCacheProvider = Provider((ref) => V4ImageCache(ref.watch(httpProvider)));
 
 class ThemeModeNotifier extends Notifier<bool> {
   @override

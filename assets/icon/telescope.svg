@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" role="img" aria-labelledby="title desc">
+  <title id="title">望远镜</title>
+  <desc id="desc">用于精读和聚焦模式的线形望远镜图标</desc>
+  <g transform="rotate(-32 11 9)">
+    <path d="M4 6.5h12.5a1 1 0 0 1 1 1v3a1 1 0 0 1-1 1H4z"/>
+    <path d="M7 6.5v5M15 6.5v5"/>
+    <path d="M4 8H2.5v2H4"/>
+  </g>
+  <circle cx="10.6" cy="12.7" r="1"/>
+  <path d="M10.6 13.7v1.4M10.6 15.1 6.5 21M10.6 15.1l4.1 5.9M10.6 15.1V21"/>
+</svg>

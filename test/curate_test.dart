@@ -10,7 +10,13 @@ class _FakeLlm extends LlmService {
   _FakeLlm(this.response) : super(HttpService(), AppConfigService());
 
   @override
-  Future<dynamic> structured(String system, String user, {double temperature = 0.3}) async => response;
+  Future<dynamic> structured(
+    String system,
+    String user, {
+    double temperature = 0.3,
+    String operation = 'AI 操作',
+    bool gate = true,
+  }) async => response;
 }
 
 void main() {

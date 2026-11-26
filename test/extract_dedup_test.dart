@@ -49,4 +49,20 @@ void main() {
     final texts = r.blocks.where((b) => b.type == 'p').map((b) => b.text ?? '').toList();
     expect(texts.length, 2, reason: '仅空白差异的同一段应被视作重复');
   });
+
+  test('懒加载配图优先取 data-src，data URI 占位被丢弃', () {
+    const lazy = '''
+    <html><body><article>
+      <p>Apple's rumored push into smart home tech could include a security camera that never records video.</p>
+      <img src="data:image/gif;base64,R0lGOD" data-src="/img/figure.png" alt="A figure">
+      <img src="data:image/gif;base64,R0lGOD">
+    </article></body></html>
+    ''';
+    final r = ExtractService().extract(lazy, url: 'https://example.com/post');
+    final images = r.blocks.where((b) => b.type == 'img').toList();
+
+    expect(images.length, 1);
+    expect(images.first.src, 'https://example.com/img/figure.png');
+    expect(images.first.alt, 'A figure');
+  });
 }

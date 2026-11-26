@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -11,13 +12,31 @@ class RetryPolicy {
   final List<Duration> backoff;
   final DateTime? deadline;
 
-  const RetryPolicy({this.attempts = 1, this.backoff = const [], this.deadline});
+  /// A timed-out request is usually still running on the server; retrying it
+  /// doubles the wait without improving the odds. Chat completions turn this
+  /// off so a slow generation fails once instead of stacking.
+  final bool retryTimeout;
+
+  const RetryPolicy({
+    this.attempts = 1,
+    this.backoff = const [],
+    this.deadline,
+    this.retryTimeout = true,
+  });
 
   static const none = RetryPolicy();
   static const batch = RetryPolicy(attempts: 2, backoff: [Duration(milliseconds: 800)]);
   static const manual = RetryPolicy(
     attempts: 3,
     backoff: [Duration(milliseconds: 500), Duration(seconds: 1), Duration(seconds: 2)],
+  );
+
+  /// LLM calls: one fast retry for transient 5xx / 429, but never re-send a
+  /// request that already burned its (long) timeout.
+  static const llm = RetryPolicy(
+    attempts: 2,
+    backoff: [Duration(milliseconds: 700)],
+    retryTimeout: false,
   );
 
   static RetryPolicy until(DateTime? deadline) =>
@@ -52,6 +71,24 @@ class HttpService {
     return _decodeBody(res);
   }
 
+  /// Binary resources such as article images: same fetch headers as the body,
+  /// because some CDNs answer 403 without a User-Agent or Referer.
+  Future<Uint8List> getBytes(
+    String url, {
+    Map<String, String>? headers,
+    RetryPolicy retry = RetryPolicy.none,
+  }) async {
+    final res = await _send(
+      () => _client.get(Uri.parse(url), headers: _headers(url, headers, true)),
+      url,
+      retry,
+    );
+    if (res.bodyBytes.isEmpty) {
+      throw AppException('emptyBody', '对方返回了空内容', detail: url);
+    }
+    return res.bodyBytes;
+  }
+
   /// 接口类请求（LLM / 翻译）：不带 UA，只带 JSON 头与调用方自带的头。
   Future<Map<String, dynamic>> getJson(
     String url, {
@@ -71,21 +108,43 @@ class HttpService {
     Map<String, dynamic> body, {
     Map<String, String>? headers,
     RetryPolicy retry = RetryPolicy.none,
+    Duration? timeout,
+  }) async {
+    final res = await _send(
+      () => _client.post(Uri.parse(url), headers: {..._jsonHeaders, ...?headers}, body: jsonEncode(body)),
+      url,
+      retry,
+      timeout,
+    );
+    return _asJson(res, url);
+  }
+
+  /// JSON request that answers with binary audio (the TTS endpoint).
+  Future<Uint8List> postBytes(
+    String url,
+    Map<String, dynamic> body, {
+    Map<String, String>? headers,
+    RetryPolicy retry = RetryPolicy.none,
   }) async {
     final res = await _send(
       () => _client.post(Uri.parse(url), headers: {..._jsonHeaders, ...?headers}, body: jsonEncode(body)),
       url,
       retry,
     );
-    return _asJson(res, url);
+    if (res.bodyBytes.isEmpty) {
+      throw AppException('emptyBody', '对方返回了空内容', detail: url);
+    }
+    return res.bodyBytes;
   }
 
   Future<http.Response> _send(
     Future<http.Response> Function() run,
     String url,
-    RetryPolicy policy,
-  ) async {
+    RetryPolicy policy, [
+    Duration? limit,
+  ]) async {
     AppException? last;
+    final budget = limit ?? timeout;
     final total = policy.attempts < 1 ? 1 : policy.attempts;
     for (var i = 0; i < total; i++) {
       final dl = policy.deadline;
@@ -93,7 +152,7 @@ class HttpService {
         throw AppException('deadline', '本次刷新已超出时间预算', detail: url, retryable: true);
       }
       try {
-        final res = await run().timeout(timeout);
+        final res = await run().timeout(budget);
         if (res.statusCode >= 200 && res.statusCode < 300) return res;
         final err = _httpError(res);
         if (!err.retryable) throw err;
@@ -101,7 +160,8 @@ class HttpService {
       } on AppException {
         rethrow;
       } on TimeoutException {
-        last = AppException('timeout', '请求超时（${timeout.inSeconds} 秒）', detail: url, retryable: true);
+        last = AppException('timeout', '请求超时（${budget.inSeconds} 秒）', detail: url, retryable: true);
+        if (!policy.retryTimeout) throw last;
       } catch (e) {
         last = AppException('network', '网络请求失败', detail: '$e', retryable: true);
       }

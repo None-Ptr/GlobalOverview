@@ -41,6 +41,41 @@ class FeedsService {
     await _db.execute('DELETE FROM feed_items WHERE feedId = ?', [id]);
   }
 
+  /// Adds a user-supplied RSS source. Returns the new feed id.
+  Future<int> addCustomFeed({
+    required String title,
+    required String url,
+    required String category,
+  }) async {
+    final name = title.trim();
+    final address = url.trim();
+    if (name.isEmpty) {
+      throw const AppException('feedTitle', '给订阅源起个名字');
+    }
+    final uri = Uri.tryParse(address);
+    if (uri == null ||
+        (uri.scheme != 'http' && uri.scheme != 'https') ||
+        uri.host.isEmpty) {
+      throw const AppException('feedUrl', '请输入以 http(s) 开头的 RSS 地址');
+    }
+    final exist = await _db.select('SELECT id FROM feeds WHERE url = ?', [
+      address,
+    ]);
+    if (exist.isNotEmpty) {
+      throw const AppException('feedExists', '这个地址已经添加过了');
+    }
+    return _db.insertReturnId(
+      'INSERT INTO feeds (title, url, category, addedAt, origin) VALUES (?,?,?,?,?)',
+      [
+        name,
+        address,
+        category,
+        DateTime.now().millisecondsSinceEpoch,
+        'custom',
+      ],
+    );
+  }
+
   Future<List<FeedItem>> items({int? feedId, int limit = 50}) async {
     final sql = feedId == null
         ? 'SELECT * FROM feed_items ORDER BY pubDate DESC LIMIT ?'
@@ -74,8 +109,10 @@ class FeedsService {
 
   /// 早于抓取守卫入库的历史数据：正文过短或缺失，视为不可用。
   Future<bool> looksUnusable(int articleId) async {
-    final rows = await _db.select('SELECT wordCount, plainText FROM articles WHERE id = ?', [articleId]);
+    final rows = await _db.select('SELECT wordCount, plainText, origin FROM articles WHERE id = ?', [articleId]);
     if (rows.isEmpty) return false;
+    // Pasted text has no source page to re-fetch and is usable by definition.
+    if (rows.first['origin'] == 'imported') return false;
     final words = (rows.first['wordCount'] as int?) ?? 0;
     final plain = (rows.first['plainText'] as String?) ?? '';
     return words < 20 || plain.trim().length < minPlainChars;
@@ -106,8 +143,8 @@ class FeedsService {
     final empty = cnt.isEmpty || (cnt.first['c'] as int? ?? 0) == 0;
     if (empty) {
       for (final f in defaultFeeds) {
-        await _db.execute('INSERT OR IGNORE INTO feeds (title, url, category, addedAt) VALUES (?,?,?,?)',
-            [f.title, f.url, f.category, DateTime.now().millisecondsSinceEpoch]);
+        await _db.execute('INSERT OR IGNORE INTO feeds (title, url, category, addedAt, origin) VALUES (?,?,?,?,?)',
+            [f.title, f.url, f.category, DateTime.now().millisecondsSinceEpoch, 'builtin']);
       }
     }
     await _db.execute("DELETE FROM feeds WHERE title IS NULL OR title = '' OR url IS NULL OR url = ''");
@@ -117,8 +154,8 @@ class FeedsService {
   /// 聚合全部订阅源的已抓取文章（含来源信息），按 pubDate 倒序分页。
   Future<List<Map<String, dynamic>>> loadItemsJoined(int cap, int offset) async {
     return _db.select(
-      'SELECT i.id, i.feedId, i.guid, i.title, i.link, i.preview, i.pubDate, i.fetchedAt, '
-      'f.title AS sourceTitle, f.url AS sourceUrl, f.category AS sourceCat '
+      'SELECT i.id, i.feedId, i.guid, i.title, i.link, i.preview, i.pubDate, i.fetchedAt, i.difficulty, '
+      'f.title AS sourceTitle, f.url AS sourceUrl, f.category AS sourceCat, f.origin AS sourceOrigin '
       'FROM feed_items i LEFT JOIN feeds f ON f.id = i.feedId '
       'ORDER BY i.pubDate DESC LIMIT ? OFFSET ?',
       [cap, offset],

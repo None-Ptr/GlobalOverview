@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/services.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -23,7 +24,9 @@ class NotificationService {
 
   /// 测试环境直接短路：widget 测试里没有通知/SharedPreferences 的平台通道，
   /// 否则会抛 MissingPluginException（与 AppConfigService 的 Keystore 处理同理）。
-  static final bool _inTest = Platform.environment.containsKey('FLUTTER_TEST');
+  /// The browser has no notification channel, so it short-circuits the same
+  /// way the test environment does.
+  static final bool _inTest = kIsWeb || Platform.environment.containsKey('FLUTTER_TEST');
 
   static const _dailyId = 1001;
   static const _riskId = 1002;
@@ -53,7 +56,7 @@ class NotificationService {
   Future<bool> requestPermission() async {
     if (_inTest) return false;
     await init();
-    if (!Platform.isAndroid) return true;
+    if (kIsWeb || !Platform.isAndroid) return true;
     final android = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
     final granted = await android?.requestNotificationsPermission() ?? false;
     if (granted) {
@@ -70,7 +73,7 @@ class NotificationService {
 
   /// 精确闹钟是否可用。不可用时退回非精确模式（系统会批量延迟投递）。
   Future<AndroidScheduleMode> _mode() async {
-    if (!Platform.isAndroid) return AndroidScheduleMode.exactAllowWhileIdle;
+    if (kIsWeb || !Platform.isAndroid) return AndroidScheduleMode.exactAllowWhileIdle;
     try {
       final android = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
       final ok = await android?.canScheduleExactNotifications() ?? false;
@@ -151,7 +154,7 @@ class NotificationService {
   Future<bool> sendTest() async {
     if (_inTest) return false;
     await init();
-    if (Platform.isAndroid) {
+    if (!kIsWeb && Platform.isAndroid) {
       final android = _plugin.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
       if (await android?.requestNotificationsPermission() != true) return false;
     }

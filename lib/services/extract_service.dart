@@ -57,7 +57,16 @@ class ExtractService {
     final seenText = <String>{};
     for (final p in root.querySelectorAll('p,li,img,h2,h3')) {
       if (p.localName == 'img') {
-        final src = _abs(p.attributes['src'], url);
+        // Lazy-loaded figures keep a 1x1 placeholder in src and the real file
+        // in a data attribute, so the attribute order matters more than src.
+        final raw =
+            p.attributes['data-src'] ??
+            p.attributes['data-original'] ??
+            p.attributes['data-lazy-src'] ??
+            p.attributes['src'];
+        final src = raw == null || raw.startsWith('data:')
+            ? null
+            : _abs(raw, url);
         if (src != null && !_isBadImage(src)) {
           blocks.add(ArticleBlock(type: 'img', src: src, alt: p.attributes['alt']));
         }
