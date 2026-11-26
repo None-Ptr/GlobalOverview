@@ -21,6 +21,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Enables Pages (source = GitHub Actions) if it was never turned on;
+      # without this the deploy step fails with 404 on first run.
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
