@@ -19,7 +19,7 @@ val keystoreProperties = Properties().apply { load(FileInputStream(keystorePrope
 android {
     namespace = "com.github.overviewsoftware.globaloverview"
     compileSdk = flutter.compileSdkVersion
-    ndkPath = "D:/OI/Android/ndk/28.2.13676358"
+    ndkVersion = "28.2.13676358"
 
     compileOptions {
         // flutter_local_notifications 需要核心库脱糖（java.time 等）。

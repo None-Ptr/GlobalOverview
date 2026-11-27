@@ -79,3 +79,164 @@
     animation: none;
   }
 }
+
+/* ---- Landing polish: hand-authored component layer ----
+   Uses only the tokens declared in @theme above. Kept in this source file so a
+   rebuild of docs/style.css carries it; no new colours are introduced. */
+
+html,
+body {
+  overflow-x: clip;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+:root {
+  color-scheme: dark;
+}
+
+/* Keyboard focus is always visible and instant. */
+:where(a, button, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-aqua);
+  outline-offset: 3px;
+}
+
+/* Section label: the chart-note caption, quieter than a tracked-caps eyebrow. */
+.kicker {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  color: var(--color-aqua);
+}
+
+/* Hero: balanced line breaks for the standfirst. */
+.hero-sub {
+  text-wrap: pretty;
+}
+
+/* Buttons: one geometry, three weights, one focus treatment. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4em;
+  border-radius: 999px;
+  padding: 0.9rem 2.1rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1;
+  text-align: center;
+  transition:
+    transform 0.2s cubic-bezier(0.4, 0, 0.2, 1),
+    background-color 0.2s,
+    border-color 0.2s,
+    box-shadow 0.2s,
+    filter 0.2s;
+}
+
+.btn-primary {
+  color: var(--color-white);
+  background: linear-gradient(90deg, var(--color-neon), var(--color-neon2));
+  box-shadow: 0 14px 36px -12px rgba(139, 92, 246, 1);
+}
+.btn-primary:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.08);
+}
+
+.btn-ghost {
+  color: var(--color-ink);
+  border: 1px solid var(--color-line);
+  background: color-mix(in oklab, var(--color-surface) 60%, transparent);
+  backdrop-filter: blur(8px);
+}
+.btn-ghost:hover {
+  transform: translateY(-2px);
+  background: var(--color-surface);
+  border-color: color-mix(in oklab, var(--color-ink3) 55%, var(--color-line));
+}
+
+.btn-quiet {
+  color: var(--color-ink2);
+  border: 1px solid transparent;
+  background: transparent;
+}
+.btn-quiet:hover {
+  color: var(--color-aqua);
+}
+.btn:active {
+  transform: translateY(0) scale(0.98);
+  filter: none;
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+
+/* Module ledger: a quiet row that lights up on hover. */
+.module-row {
+  position: relative;
+  transition: background-color 0.2s;
+}
+.module-row::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: 2px;
+  background: transparent;
+  transition: background-color 0.2s;
+}
+.module-row:hover {
+  background: color-mix(in oklab, var(--color-surface) 45%, transparent);
+}
+.module-row:hover::before {
+  background: var(--color-aqua);
+}
+
+.module-badge {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, currentColor 22%, transparent);
+}
+
+/* Screens: lift on hover, never shifting layout. */
+.shot {
+  transition:
+    transform 0.35s cubic-bezier(0.22, 0.61, 0.36, 1),
+    box-shadow 0.35s;
+}
+.shot:hover {
+  transform: translateY(-6px);
+  box-shadow: 0 34px 60px -30px rgba(0, 0, 0, 0.98);
+}
+
+/* Download card: a soft halo behind the call to action. */
+.download-card {
+  background-image: radial-gradient(
+    120% 140% at 50% -20%,
+    color-mix(in oklab, var(--color-neon) 20%, transparent),
+    transparent 60%
+  );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .btn,
+  .shot,
+  .module-row,
+  .module-row::before {
+    transition: none;
+  }
+  .btn:hover,
+  .btn-primary:hover,
+  .btn-ghost:hover,
+  .btn:active,
+  .shot:hover {
+    transform: none;
+  }
+}
+

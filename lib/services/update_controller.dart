@@ -1,6 +1,20 @@
 import 'package:flutter/foundation.dart';
 import 'package:global_overview/services/update_service.dart';
 
+/// Display form of a version: drop redundant trailing `.0` groups while keeping
+/// at least major.minor, so `4.0.0` reads as `4.0` and `4.1.2` stays intact.
+String displayVersion(String raw) {
+  var s = raw.trim();
+  if (s.startsWith('v') || s.startsWith('V')) s = s.substring(1);
+  s = s.split('+').first.split('-').first;
+  final parts = s.split('.');
+  if (parts.length < 2) return s;
+  while (parts.length > 2 && parts.last == '0') {
+    parts.removeLast();
+  }
+  return parts.join('.');
+}
+
 enum UpdatePhase {
   idle,
 
@@ -46,7 +60,7 @@ class UpdateController extends ChangeNotifier {
 
   Future<void> init() async {
     final v = await service.installedVersion();
-    installedLabel = 'v$v';
+    installedLabel = 'v${displayVersion(v)}';
     notifyListeners();
   }
 

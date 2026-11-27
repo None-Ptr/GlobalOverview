@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import 'package:open_filex/open_filex.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -94,7 +95,7 @@ class UpdateService {
 
   /// 测试环境默认不联网/不碰平台通道（widget 测试里没有真实网络与插件）。
   /// 服务自身的单测把它置 false 并注入假的 [http.Client] 来测端点逻辑。
-  static bool offline = Platform.environment.containsKey('FLUTTER_TEST');
+  static bool offline = kIsWeb || Platform.environment.containsKey('FLUTTER_TEST');
 
   static const _kOkHost = 'update_ok_host';
   static const _kDead = 'update_dead_hosts';
@@ -400,13 +401,13 @@ class UpdateService {
   /// [requestInstallPermission] 打开。
   Future<bool> canInstallPackages() async {
     if (offline) return false;
-    if (!Platform.isAndroid) return true;
+    if (kIsWeb || !Platform.isAndroid) return true;
     return Permission.requestInstallPackages.isGranted;
   }
 
   Future<bool> requestInstallPermission() async {
     if (offline) return false;
-    if (!Platform.isAndroid) return true;
+    if (kIsWeb || !Platform.isAndroid) return true;
     final s = await Permission.requestInstallPackages.request();
     return s.isGranted;
   }

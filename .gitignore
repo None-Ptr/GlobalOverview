@@ -18,6 +18,7 @@ analysis_options.yaml
 .pub-cache/
 .pub/
 build/
+_site/
 flutter_*.png
 .fvm/
 
@@ -58,8 +59,7 @@ windows/flutter/generated_plugin_registrant.cc
 linux/flutter/generated_plugin_registrant.cc
 linux/flutter/generated_plugins.cmake
 
-# Web
-web/icons/Icon-*.png
+# Web: icons are referenced by manifest.json, so they must be committed
 
 # Old uni-app build artifacts (archived under legacy/, keep out of vcs)
 node_modules/
@@ -68,4 +68,7 @@ dist/
 # Bundled SDK artifacts
 Android-SDK@*/
 
-.codebuddy
+.codebuddy/
+.hallmark/
+.superpowers/
+.idea/

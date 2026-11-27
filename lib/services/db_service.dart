@@ -53,6 +53,19 @@ class DbService {
       }
     }
 
+    /// SQLite has no `ADD COLUMN IF NOT EXISTS`; check the table first so the
+    /// upgrade is idempotent on a database that already carries the column.
+    Future<void> addColumn(
+      Database db,
+      String table,
+      String column,
+      String type,
+    ) async {
+      final info = await db.rawQuery('PRAGMA table_info($table)');
+      final exists = info.any((row) => '${row['name']}' == column);
+      if (!exists) await db.execute('ALTER TABLE $table ADD COLUMN $column $type');
+    }
+
     final db = await openDatabase(
       path,
       version: _dbVersion,
@@ -62,6 +75,22 @@ class DbService {
         await runScript(db, _indexes);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
+        // v8: user-added RSS sources and imported articles need a source
+        // marker, so the reading list can say where a item came from.
+        if (oldVersion < 8) {
+          await addColumn(db, 'feeds', 'origin', "TEXT DEFAULT 'builtin'");
+          await addColumn(db, 'articles', 'origin', "TEXT DEFAULT 'web'");
+        }
+        // v7: a short purpose label on each generated set, so an article can
+        // tell its own sets apart in the record at the foot of the page.
+        if (oldVersion < 7) {
+          await addColumn(db, 'question_sets', 'label', 'TEXT');
+        }
+        // v6: FeedOverview 的 0–100 难度值，先落在条目上，抓取成文章时一并带走。
+        if (oldVersion < 6) {
+          await addColumn(db, 'feed_items', 'difficulty', 'INTEGER');
+          await addColumn(db, 'articles', 'difficulty', 'INTEGER');
+        }
         // 老库升级：索引用 CREATE INDEX IF NOT EXISTS，幂等；按当前版本把缺失索引补齐即可。
         if (oldVersion < _dbVersion) await runScript(db, _indexes);
       },
@@ -86,6 +115,20 @@ class DbService {
     return id;
   }
 
+  /// Runs many statements in one transaction: a question set is twenty rows,
+  /// and twenty autocommits are twenty fsyncs the user waits for.
+  Future<void> batch(List<({String sql, List<Object?> params})> statements) async {
+    if (statements.isEmpty) return;
+    final db = await database;
+    await _withWriteLock(
+      () => db.transaction((txn) async {
+        for (final statement in statements) {
+          await txn.execute(statement.sql, statement.params);
+        }
+      }),
+    );
+  }
+
   Future<T> _withWriteLock<T>(Future<T> Function() fn) {
     final c = Completer<T>();
     _writeChain = _writeChain.then((_) async {
@@ -103,6 +146,19 @@ class DbService {
       for (final t in ['feeds', 'feed_items', 'articles', 'question_sets', 'questions', 'answers', 'word_cache', 'presets', 'plan_items', 'vocab_head', 'vocab_occ', 'vocab_sentence']) {
         await execute('DELETE FROM $t');
       }
+    });
+  }
+
+  /// 在一个事务里清空多张表：任一失败整体回滚，避免半清空状态。
+  Future<void> deleteTables(List<String> tables) async {
+    if (tables.isEmpty) return;
+    await _withWriteLock(() async {
+      final db = await database;
+      await db.transaction((txn) async {
+        for (final table in tables) {
+          await txn.delete(table);
+        }
+      });
     });
   }
 
@@ -205,23 +261,23 @@ const String _schema = '''
 CREATE TABLE IF NOT EXISTS feeds (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   title TEXT, url TEXT UNIQUE, category TEXT, addedAt INTEGER,
-  failCount INTEGER DEFAULT 0
+  failCount INTEGER DEFAULT 0, origin TEXT DEFAULT 'builtin'
 );
 CREATE TABLE IF NOT EXISTS feed_items (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   feedId INTEGER, guid TEXT, title TEXT, link TEXT,
-  preview TEXT, pubDate INTEGER, fetchedAt INTEGER,
+  preview TEXT, pubDate INTEGER, fetchedAt INTEGER, difficulty INTEGER,
   UNIQUE(feedId, guid)
 );
 CREATE TABLE IF NOT EXISTS articles (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   guid TEXT UNIQUE, title TEXT, author TEXT, sourceUrl TEXT,
   html TEXT, plainText TEXT, blocks TEXT, wordCount INTEGER, capturedAt INTEGER,
-  curated_blocks TEXT
+  curated_blocks TEXT, difficulty INTEGER, origin TEXT DEFAULT 'web'
 );
 CREATE TABLE IF NOT EXISTS question_sets (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  articleId INTEGER, presetId INTEGER, title TEXT, createdAt INTEGER
+  articleId INTEGER, presetId INTEGER, title TEXT, createdAt INTEGER, label TEXT
 );
 CREATE TABLE IF NOT EXISTS questions (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -318,4 +374,4 @@ const List<String> dbIndexStatements = [
 final String _indexes = '${dbIndexStatements.join(';\n')};';
 
 /// 当前数据库版本；每次改 [schema]/[_indexes] 后 +1 并在 [onUpgrade] 里补迁移。
-const int _dbVersion = 5;
+const int _dbVersion = 8;

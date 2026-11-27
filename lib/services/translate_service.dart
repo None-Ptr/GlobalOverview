@@ -3,6 +3,7 @@ import 'package:crypto/crypto.dart';
 import 'package:global_overview/services/http_service.dart';
 import 'package:global_overview/services/app_config_service.dart';
 import 'package:global_overview/services/llm_service.dart';
+import 'package:global_overview/services/prompts.dart';
 
 class TranslateService {
   final HttpService _http;
@@ -52,7 +53,11 @@ class TranslateService {
 
   Future<String> _llmFallback(String text, String from, String to) async {
     try {
-      return await _llm.chat('You are a translator. Translate the text between the markers from $from to $to. Output only the translation.', text);
+      return await _llm.chat(
+        Prompts.translateSystem,
+        Prompts.translateUser(from: from, to: to, text: text),
+        operation: '翻译',
+      );
     } catch (_) {
       return text;
     }

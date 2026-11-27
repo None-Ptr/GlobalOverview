@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'builtin_llm_key.dart' if (dart.library.html) 'builtin_llm_key_web.dart';
+
 class LlmProfile {
   final String id;
   final String name;
@@ -43,16 +45,20 @@ class CustomTranslator {
 }
 
 class AppConfigService extends ChangeNotifier {
+  static const builtinProfileId = 'builtin_free';
+
   static final _builtinFree = LlmProfile(
-    id: 'builtin_free',
-    name: 'GLM-4.7-Flash',
+    id: builtinProfileId,
+    name: 'GLM-4-flash',
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-    apiKey: 'dc0fd1de95b9ffc7e3b86e2f3d8c4a3e',
-    model: 'glm-4.7-flash',
+    apiKey: builtinLlmKey,
+    model: 'glm-4-flash',
   );
 
   SharedPreferences? _prefs;
-  bool _secureOk = !Platform.environment.containsKey('FLUTTER_TEST');
+  // Web has no Keystore, but flutter_secure_storage does have a web backend,
+  // and there is no FLUTTER_TEST flag in dart:io on the browser at all.
+  bool _secureOk = kIsWeb || !Platform.environment.containsKey('FLUTTER_TEST');
   List<LlmProfile> _profiles = [];
   String _currentProfileId = _builtinFree.id;
   TranslateConfig _translate = TranslateConfig();
@@ -64,9 +70,24 @@ class AppConfigService extends ChangeNotifier {
   String _transEngine = 'auto';
   String _userAgent = '';
   String _extraHeaders = '';
+  String _ttsVoice = defaultTtsVoice;
+  int _ttsRate = 0;
+  int _ttsPitch = 0;
+  /// Daily soft cap in CNY; 0 means no cap.
+  double _aiDailyBudget = 0;
 
   static const defaultUserAgent =
       'Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36';
+
+  static const defaultTtsVoice = 'en-US-AriaNeural';
+  static const ttsVoices = <String, String>{
+    'en-US-AriaNeural': 'Aria · 美式女声',
+    'en-US-JennyNeural': 'Jenny · 美式女声',
+    'en-US-GuyNeural': 'Guy · 美式男声',
+    'en-US-DavisNeural': 'Davis · 美式男声',
+    'en-GB-SoniaNeural': 'Sonia · 英式女声',
+    'en-GB-RyanNeural': 'Ryan · 英式男声',
+  };
 
   static const _kProfiles = 'llm_profiles';
   static const _kCurrent = 'llm_current';
@@ -96,6 +117,10 @@ class AppConfigService extends ChangeNotifier {
   List<CustomTranslator> get translators => _translators;
   String get userAgent => _userAgent;
   String get extraHeaders => _extraHeaders;
+  String get ttsVoice => _ttsVoice;
+  int get ttsRate => _ttsRate;
+  int get ttsPitch => _ttsPitch;
+  double get aiDailyBudget => _aiDailyBudget;
   String get effectiveUserAgent => _userAgent.trim().isEmpty ? defaultUserAgent : _userAgent.trim();
 
   /// 抓取链路（RSS 列表 / 文章正文 / 图片）用的请求头；LLM 与翻译接口不经过这里。
@@ -170,6 +195,10 @@ class AppConfigService extends ChangeNotifier {
     _transEngine = _prefs!.getString('reader_transEngine') ?? 'auto';
     _userAgent = _prefs!.getString(_kUa) ?? '';
     _extraHeaders = await _readSecret(_sExtraHeaders, _kExtraHeaders) ?? '';
+    _ttsVoice = _prefs!.getString('tts_voice') ?? defaultTtsVoice;
+    _ttsRate = _prefs!.getInt('tts_rate') ?? 0;
+    _ttsPitch = _prefs!.getInt('tts_pitch') ?? 0;
+    _aiDailyBudget = _prefs!.getDouble('ai_daily_budget') ?? 0;
     final rawTr = await _readSecret(_sTranslators, _kTranslators);
     if (rawTr != null) {
       try {
@@ -257,6 +286,28 @@ class AppConfigService extends ChangeNotifier {
       _transEngine = transEngine;
       await _prefs!.setString('reader_transEngine', transEngine);
     }
+    notifyListeners();
+  }
+
+  Future<void> setTts({String? voice, int? rate, int? pitch}) async {
+    if (voice != null) {
+      _ttsVoice = voice;
+      await _prefs!.setString('tts_voice', voice);
+    }
+    if (rate != null) {
+      _ttsRate = rate;
+      await _prefs!.setInt('tts_rate', rate);
+    }
+    if (pitch != null) {
+      _ttsPitch = pitch;
+      await _prefs!.setInt('tts_pitch', pitch);
+    }
+    notifyListeners();
+  }
+
+  Future<void> setAiDailyBudget(double value) async {
+    _aiDailyBudget = value <= 0 ? 0 : value;
+    await _prefs!.setDouble('ai_daily_budget', _aiDailyBudget);
     notifyListeners();
   }
 

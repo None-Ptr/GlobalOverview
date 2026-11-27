@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:global_overview/services/db_service.dart';
 import 'package:global_overview/services/llm_service.dart';
+import 'package:global_overview/services/prompts.dart';
 
 class QuizService {
   final LlmService _llm;
@@ -36,6 +37,32 @@ class QuizService {
         'SELECT id, setId, type, gradeMode, prompt, options, answers, analysis, sourceQuote FROM questions WHERE setId = ? ORDER BY id ASC',
         [setId]);
     return _mapQuestions(rows);
+  }
+
+  /// Rename a set's purpose label without touching its questions or answers.
+  Future<void> setSetLabel(int setId, String label) async {
+    await _db.execute(
+      'UPDATE question_sets SET label = ? WHERE id = ?',
+      [label, setId],
+    );
+  }
+
+  /// 一篇文章历次生成的题集，按时间倒序。答案按「作答次数」统计而不是按题数：
+  /// 同一道题可以重做多次，每一次都是真实发生过的事。
+  Future<List<Map<String, dynamic>>> listSetsForArticle(int articleId) async {
+    return _db.select(
+      'SELECT s.id AS id, s.createdAt AS createdAt, s.label AS label, '
+      'COUNT(DISTINCT q.id) AS questionCount, '
+      'COUNT(a.id) AS attempts, '
+      'SUM(CASE WHEN a.correct = 1 THEN 1 ELSE 0 END) AS correctAttempts '
+      'FROM question_sets s '
+      'LEFT JOIN questions q ON q.setId = s.id '
+      'LEFT JOIN answers a ON a.questionId = q.id '
+      'WHERE s.articleId = ? '
+      'GROUP BY s.id '
+      'ORDER BY s.createdAt DESC',
+      [articleId],
+    );
   }
 
   Future<List<Map<String, dynamic>>> loadQuestionsByIds(List<int> ids) async {
@@ -118,32 +145,108 @@ class QuizService {
     return info != null ? '${info['label']}' : (type ?? '题目');
   }
 
+  /// 题型显示名（对齐 quiz.js 的 typeLabel）。出题规则在 `Prompts` 里，这里只管名字。
   static const examMap = {
-    'cloze': {'label': '完形填空', 'prompt': 'Generate cloze (fill-in-the-blank) questions by removing key words.'},
-    'choice': {'label': '阅读理解选择', 'prompt': 'Generate multiple-choice reading comprehension questions with 4 options.'},
-    'blank': {'label': '语法填空', 'prompt': 'Generate grammar fill-in-the-blank questions.'},
-    'match': {'label': '信息匹配', 'prompt': 'Generate matching questions.'},
-    'tf': {'label': '判断正误', 'prompt': 'Generate true/false questions.'},
-    'order': {'label': '句子排序', 'prompt': 'Generate sentence-ordering questions.'},
-    'summary': {'label': '概要写作', 'prompt': 'Generate a summary-writing prompt.'},
-    'translateEn': {'label': '英译中', 'prompt': 'Generate English-to-Chinese translation questions.'},
-    'translateZh': {'label': '中译英', 'prompt': 'Generate Chinese-to-English translation questions.'},
-    'vocab': {'label': '词汇运用', 'prompt': 'Generate vocabulary usage questions.'},
-    'phrase': {'label': '短语填空', 'prompt': 'Generate phrase fill-in-the-blank questions.'},
-    'rewrite': {'label': '句子改写', 'prompt': 'Generate sentence-rewriting questions.'},
-    'open': {'label': '开放性问答', 'prompt': 'Generate open-ended questions.'},
+    'cloze': {'label': '完形填空'},
+    'choice': {'label': '阅读理解选择'},
+    'blank': {'label': '语法填空'},
+    'match': {'label': '信息匹配'},
+    'tf': {'label': '判断正误'},
+    'order': {'label': '句子排序'},
+    'summary': {'label': '概要写作'},
+    'translateEn': {'label': '英译中'},
+    'translateZh': {'label': '中译英'},
+    'vocab': {'label': '词汇运用'},
+    'phrase': {'label': '短语填空'},
+    'rewrite': {'label': '句子改写'},
+    'open': {'label': '开放性问答'},
   };
 
-  Future<List<Map<String, dynamic>>> generate(String articleText, String type, int count) async {
-    final info = examMap[type] ?? {'label': type, 'prompt': 'Generate questions.'};
-    final prompt =
-        'Based on the article, create $count ${info['label']} questions. ${info['prompt']}\nReturn a JSON array: [{"type":"$type","prompt":"","options":[] (only for choice/match/tf),"answers":[],"analysis":""}].';
+  Future<List<Map<String, dynamic>>> generate(
+    String articleText,
+    String type,
+    int count, {
+    String? examLevel,
+    String? instruction,
+  }) {
+    return _run(
+      articleText,
+      [type],
+      [count],
+      examLevel: examLevel,
+      instruction: instruction,
+    );
+  }
+
+  /// One call for a mixed set: [count] is the total, split as evenly as the
+  /// numbers allow across [types].
+  Future<List<Map<String, dynamic>>> generateMixed(
+    String articleText,
+    List<String> types,
+    int count, {
+    String? examLevel,
+    String? instruction,
+  }) {
+    final picked = types.where(examMap.containsKey).toList();
+    if (picked.isEmpty) return Future.value(const []);
+    return _run(
+      articleText,
+      picked,
+      _splitCount(count, picked.length),
+      examLevel: examLevel,
+      instruction: instruction,
+    );
+  }
+
+  /// Single and mixed sets are the same prompt: the mix is a list of one.
+  Future<List<Map<String, dynamic>>> _run(
+    String articleText,
+    List<String> types,
+    List<int> counts, {
+    String? examLevel,
+    String? instruction,
+  }) async {
+    final plan = <PracticeItem>[
+      for (var i = 0; i < types.length; i++)
+        PracticeItem(
+          type: types[i],
+          label: typeLabel(types[i]),
+          count: counts[i],
+        ),
+    ];
+    final level = (examLevel != null && examLevel.isNotEmpty)
+        ? (examLevels[examLevel] ?? examLevel)
+        : null;
+    final user = Prompts.practiceUser(
+      plan: plan,
+      article: LlmService.clipArticle(articleText),
+      level: level,
+      extra: instruction,
+    );
     final res = await _llm.structured(
-        'You are an English exam generator for Chinese high-school / IELTS learners.',
-        '$prompt\n\nARTICLE:\n${LlmService.clipArticle(articleText)}');
-    if (res is List) return res.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+      Prompts.practiceSystem,
+      user,
+      operation: '生成练习',
+    );
+    return _parseQuestions(res);
+  }
+
+  /// Even split with the remainder going to the earlier types.
+  static List<int> _splitCount(int count, int buckets) {
+    final base = count ~/ buckets;
+    final rest = count % buckets;
+    return [for (var i = 0; i < buckets; i++) base + (i < rest ? 1 : 0)];
+  }
+
+  static List<Map<String, dynamic>> _parseQuestions(dynamic res) {
+    if (res is List) {
+      return res.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+    }
     if (res is Map && res['questions'] is List) {
-      return (res['questions'] as List).whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+      return (res['questions'] as List)
+          .whereType<Map>()
+          .map((e) => Map<String, dynamic>.from(e))
+          .toList();
     }
     return [];
   }

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:global_overview/services/db_service.dart';
 import 'package:global_overview/services/llm_service.dart';
+import 'package:global_overview/services/prompts.dart';
 
 class VocabService {
   final DbService _db;
@@ -188,6 +189,37 @@ class VocabService {
     await _db.execute('DELETE FROM vocab_occ WHERE lemma = ?', [head]);
   }
 
+  /// 删除前把词条与全部出现记录打包，供「撤销」原样写回。
+  Future<Map<String, dynamic>> removeHeadSnapshot(String head) async {
+    final heads = await _db.select('SELECT * FROM vocab_head WHERE head = ?', [head]);
+    final occ = await _db.select('SELECT * FROM vocab_occ WHERE lemma = ?', [head]);
+    await removeHead(head);
+    return {
+      'head': heads.isEmpty ? null : Map<String, dynamic>.of(heads.first),
+      'occ': occ.map((e) => Map<String, dynamic>.of(e)).toList(),
+    };
+  }
+
+  Future<void> restoreHead(Map<String, dynamic> snapshot) async {
+    final head = snapshot['head'] as Map<String, dynamic>?;
+    if (head == null || head.isEmpty) return;
+    final cols = head.keys.toList();
+    await _db.execute(
+      'INSERT OR REPLACE INTO vocab_head (${cols.join(',')}) '
+      'VALUES (${List.filled(cols.length, '?').join(',')})',
+      head.values.toList(),
+    );
+    for (final row in (snapshot['occ'] as List? ?? const [])) {
+      if (row is! Map) continue;
+      final ocols = row.keys.toList();
+      await _db.execute(
+        'INSERT OR IGNORE INTO vocab_occ (${ocols.join(',')}) '
+        'VALUES (${List.filled(ocols.length, '?').join(',')})',
+        row.values.toList(),
+      );
+    }
+  }
+
   Future<void> clearVocab() async {
     await _db.execute('DELETE FROM vocab_head');
     await _db.execute('DELETE FROM vocab_occ');
@@ -209,12 +241,12 @@ class VocabService {
   /// 对收藏句子做语法/语块拆解。结果 upsert 进 vocab_sentence（先 INSERT 保底新句、再 UPDATE 覆盖已有句的 analysis，
   /// 不破坏 saveSentence 写入的 articleGuid 等元数据）。
   Future<Map<String, dynamic>> analyzeSentence(String sentence) async {
-    const sys = '你是英语语法与语块分析助手。只输出对象，不要解释、不要 markdown。结构：'
-        '{"translation":"整句自然中文翻译",'
-        '"chunks":[{"text":"语块原文","type":"phrase|clause|idiom|fixed","note":"这个语块的意思/作用"}],'
-        '"grammar":[{"point":"语法点","explain":"一句话说明"}],'
-        '"keywords":[{"word":"重点词","pos":"词性","zh":"中文释义"}]}';
-    final res = await _llm.structured(sys, '请拆解并分析这句话：\n$sentence', temperature: 0.3);
+    final res = await _llm.structured(
+      Prompts.sentenceSystem,
+      Prompts.sentenceUser(sentence),
+      temperature: 0.3,
+      operation: '句子拆解',
+    );
     final data = <String, dynamic>{
       'translation': res is Map ? (res['translation'] ?? '') : '',
       'chunks': (res is Map && res['chunks'] is List) ? res['chunks'] : [],
@@ -253,11 +285,12 @@ class VocabService {
       } catch (_) {}
       return {'word': w['word'], 'mode': w['mode'], 'hint': hint};
     }).toList();
-    const sys = '你是一个英语词汇整理助手。';
-    final prompt = '下面是一批用户在阅读中查询过的生词（JSON 数组，含 word / mode / hint）。'
-        '请按主题将生词聚类分组，并为每个词补全：lemma（词族原形小写）、pos（词性缩写）、zh（中文释义）、en（英文释义）、family（常见形态数组，含自身）、example（一个地道英文例句）。'
-        '只输出如下 JSON：{"groups":[{"theme":"...","items":[{"word":"...","lemma":"...","pos":"...","zh":"...","en":"...","family":[...],"example":"..."}]}]}\n生词列表：\n${jsonEncode(list)}';
-    final res = await _llm.structured(sys, prompt, temperature: 0.3);
+    final res = await _llm.structured(
+      Prompts.organizeSystem,
+      Prompts.organizeUser(jsonEncode(list)),
+      temperature: 0.3,
+      operation: '词汇整理',
+    );
     if (res is! Map || res['groups'] is! List) throw Exception('模型返回结构异常');
     return Map<String, dynamic>.from(res);
   }
